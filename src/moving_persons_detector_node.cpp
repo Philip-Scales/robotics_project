@@ -34,7 +34,7 @@ private:
     ros::NodeHandle n;
 
     ros::Subscriber sub_scan;
-    ros::Subscriber sub_robot_moving;
+//    ros::Subscriber sub_robot_moving;
     ros::Subscriber sub_goal_reached;
 
     ros::Publisher pub_moving_persons_detector;
@@ -85,12 +85,28 @@ private:
     bool new_robot;//to check if new data of robot_moving is available or not
     bool goal_reached;
 
+
+
+
+
+
+
+    //! ======================================================================
+    bool firstTime = true;
+    static const constexpr float LOCK_RADIUS = 1.0f;
+    static const constexpr float LOST_TIMEOUT_SEC = 5.5f;
+    static const int UPDATE_FREQ_HZ = 10;
+
+    int lostTimeoutCycles = 0;
+
+    int cyclesSinceLastDetection = 0;
+
 public:
 
 moving_persons_detector() {
 
     sub_scan = n.subscribe("scan", 1, &moving_persons_detector::scanCallback, this);
-    sub_robot_moving = n.subscribe("robot_moving", 1, &moving_persons_detector::robot_movingCallback, this);
+//    sub_robot_moving = n.subscribe("robot_moving", 1, &moving_persons_detector::robot_movingCallback, this);
     sub_goal_reached = n.subscribe("goal_reached", 1, &moving_persons_detector::goal_reachedCallback, this);
 
     pub_moving_persons_detector_marker = n.advertise<visualization_msgs::Marker>("moving_persons_detector", 1); // Preparing a topic to publish our results. This will be used by the visualization tool rviz
@@ -104,8 +120,10 @@ moving_persons_detector() {
     old_goal_to_reach.x = 1000;
     old_goal_to_reach.y = 1000;
 
+
+    lostTimeoutCycles = UPDATE_FREQ_HZ * LOST_TIMEOUT_SEC;
     //INFINTE LOOP TO COLLECT LASER DATA AND PROCESS THEM
-    ros::Rate r(10);// this node will run at 10hz
+    ros::Rate r(UPDATE_FREQ_HZ);// this node will run at 10hz
     while (ros::ok()) {
         ros::spinOnce();//each callback is called once to collect new data: laser + robot_moving
         update();//processing of data
@@ -121,18 +139,18 @@ void update() {
 
     goal_reached = false;
     // we wait for new data of the laser and of the robot_moving_node to perform laser processing
-    if ( new_laser && new_robot ) {
+    if ( new_laser ) {
         new_laser = false;
         new_robot = false;
         nb_pts = 0;
 
         //if the robot is not moving then we can perform moving persons detection
-        if ( !current_robot_moving ) {
+        if ( 1 ) {
 
             ROS_INFO("robot is not moving");
             // if the robot was moving previously and now it is not moving now then we store the background
-            if ( previous_robot_moving && !current_robot_moving )
-                store_background();
+//            if ( previous_robot_moving && !current_robot_moving )
+//                store_background();
 
             //we search for moving persons in 4 steps
             detect_motion();//to classify each hit of the laser as dynamic or not
@@ -141,23 +159,32 @@ void update() {
             detect_moving_persons();//to detect moving_persons using moving legs detected
 
             //graphical display of the results
-            populateMarkerTopic();
 
             if (fabs(goal_to_reach.x) > 0.001 && fabs(goal_to_reach.y) > 0.001) {
                 //to publish the goal_to_reach
-                if (std::hypot(goal_to_reach.x - old_goal_to_reach.x, goal_to_reach.y - old_goal_to_reach.y) > 0.01) {
+                if (std::hypot(goal_to_reach.x - old_goal_to_reach.x, goal_to_reach.y - old_goal_to_reach.y) > 0.0001) {
                     ROS_INFO("ACHTUNG");
                     old_goal_to_reach = goal_to_reach;
+                    display[nb_pts].x = goal_to_reach.x;
+                    display[nb_pts].y = goal_to_reach.y;
+
+                    colors[nb_pts].r = 1.0;
+                    colors[nb_pts].g = 0.6;
+                    colors[nb_pts].b = 0.0;
+
+                    ++nb_pts;
+
                     pub_moving_persons_detector.publish(goal_to_reach);
                 }
             }
+            populateMarkerTopic();
         }
-        else
-            ROS_INFO("robot is moving");
-        ROS_INFO("\n");
+//        else
+//            ROS_INFO("robot is moving");
+//        ROS_INFO("\n");
     }
-    else
-        ROS_INFO("wait for data");
+//    else
+//        ROS_INFO("wait for data");
 
     
             
@@ -272,7 +299,7 @@ void detect_moving_legs() {
         int currentCluster = loop;
         if ((cluster_size[currentCluster] > leg_size_min)
          && (cluster_size[currentCluster] < leg_size_max)
-         && (cluster_dynamic[currentCluster] > dynamic_threshold)) {
+         && ((cluster_dynamic[currentCluster] > dynamic_threshold) || !firstTime)) {
 
             // we update the moving_leg_detected table to store the middle of the moving leg
             moving_leg_detected[nb_moving_legs_detected] = cluster_middle[currentCluster];
@@ -287,7 +314,7 @@ void detect_moving_legs() {
                 display[nb_pts].y = current_scan[loop2].y;
                 display[nb_pts].z = current_scan[loop2].z;
 
-                colors[nb_pts].r = 1;
+                colors[nb_pts].r = 0.6;
                 colors[nb_pts].g = 0;
                 colors[nb_pts].b = 0;
                 colors[nb_pts].a = 1.0;
@@ -311,7 +338,7 @@ void detect_moving_persons() {
 
 //    ROS_INFO("detecting moving persons");
     nb_moving_persons_detected = 0;
-    float max_dist = 100000.0;
+    float min_dist = 100000.0;
 
 
     for (int loop_leg1=0; loop_leg1<nb_moving_legs_detected; loop_leg1++) {
@@ -340,21 +367,47 @@ void detect_moving_persons() {
                 display[nb_pts].z = moving_persons_detected[nb_moving_persons_detected].z;
 
                 colors[nb_pts].r = 0;
-                colors[nb_pts].g = 1;
+                colors[nb_pts].g = 0.6;
                 colors[nb_pts].b = 0;
                 colors[nb_pts].a = 1.0;
 
                 nb_pts++;
 
                 //update of the goal
-                if (std::hypotf(curPerson.x, curPerson.y) < max_dist) {
-                    max_dist = std::hypotf(curPerson.x, curPerson.y);
-                    goal_to_reach = curPerson;
+
+
+                if (firstTime) {
+                    if (std::hypotf(curPerson.x, curPerson.y) < min_dist) {
+                        firstTime = false;
+                        min_dist = std::hypotf(curPerson.x, curPerson.y);
+                        goal_to_reach = curPerson;
+                    }
                 }
+                else if (distancePoints(curPerson, old_goal_to_reach) < min_dist) {
+                    min_dist = distancePoints(curPerson, old_goal_to_reach);
+                    goal_to_reach = curPerson;
+
+                    if (min_dist > LOCK_RADIUS) {
+                        goal_to_reach = old_goal_to_reach;
+                    }
+                }
+
+
 
             }
 
         }
+    }
+
+    if (distancePoints(goal_to_reach, old_goal_to_reach) < 0.00001) {
+        ++cyclesSinceLastDetection;
+    } else {
+        cyclesSinceLastDetection = 0;
+    }
+
+    if (cyclesSinceLastDetection >= lostTimeoutCycles) {
+        cyclesSinceLastDetection = 0;
+        firstTime = true;
     }
 
 
@@ -400,6 +453,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan) {
 
 }//scanCallback
 
+#if 0
 void robot_movingCallback(const std_msgs::Bool::ConstPtr& state) {
 
     new_robot = true;
@@ -408,6 +462,7 @@ void robot_movingCallback(const std_msgs::Bool::ConstPtr& state) {
     current_robot_moving = state->data;
 
 }//robot_movingCallback
+#endif
 
 void goal_reachedCallback(const geometry_msgs::Point::ConstPtr& g) {
 
