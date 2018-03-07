@@ -1,0 +1,8 @@
+prefix=/home/phil/catkin_ws/src/follow_me/devel
+
+Name: follow_me
+Description: Description of follow_me
+Version: 0.0.0
+Cflags: 
+Libs: -L/home/phil/catkin_ws/src/follow_me/devel/lib 
+Requires: 
