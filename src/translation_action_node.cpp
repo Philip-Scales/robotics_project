@@ -44,10 +44,9 @@ private:
     ros::Subscriber sub_rotation_to_do;
 
     float rotation_to_do, rotation_done;
-    bool cond_rotation;// boolean to check if we still have to rotate or not
 
     bool new_rotation_to_do;//to check if a new /rotation_to_do is available or not
-
+    bool cond_rotation;
     float init_orientation;
     float current_orientation;
 
@@ -84,6 +83,7 @@ private:
     int cond_translation;
 
     geometry_msgs::Point closest_obstacle;
+    geometry_msgs::Point movement_to_do;
 
 public:
 
@@ -127,74 +127,82 @@ translation_action() {
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
 void update() {
     float rotation_speed = 0;
+    float translation_speed = 0;
     
-    // we receive a new /rotation_to_do
-    if ( new_rotation_to_do && new_odom ) {
-        new_rotation_to_do = false;
+    // we receive a new "movement"  (translation) to do
+    if ( new_translation_to_do && new_odom ) {
         ROS_INFO("\n(translation_action_node) processing the /rotation_to_do received from the decision node");
         ROS_INFO("(translation_action_node) rotation_to_do: %f", rotation_to_do*180/M_PI);
+        //reset rotation related stuff
+        r_error_integral = 0;
+        r_error_previous = 0;
+        new_translation_to_do = false;
+        cond_rotation = true;
 
         init_orientation = current_orientation;
         rotation_done = current_orientation;
         rotation_to_do += current_orientation;
-        cond_rotation = true;
+        
         r_error_previous = rotation_to_do;
 
         if ( rotation_to_do > M_PI )
             rotation_to_do -= 2*M_PI;
         if ( rotation_to_do < -M_PI )
             rotation_to_do += 2*M_PI;
+            
+        //reset translation related stuff
+        ROS_INFO("\n(translation_action_node) processing the /translation_to_do received from the decision node");
+        ROS_INFO("(translation_action_node) translation_to_do: %f", translation_to_do);
+        t_error_integral = 0;
+        t_error_previous = 0;
+        new_translation_to_do = false;
+        cond_translation = true;
+        init_obstacle = false;
+
+        start_position.x = current_position.x;
+        start_position.y = current_position.y;
+
 
     }
     //we are performing a rotation
     if ( new_odom && cond_rotation ) {
         rotation_done = current_orientation;
         float error = ( rotation_to_do - rotation_done );
-
         if ( error > M_PI ) {
             ROS_WARN("(translation_action node) error > 180 degrees: %f degrees -> %f degrees", error*180/M_PI, (error-2*M_PI)*180/M_PI);
             error -= 2*M_PI;
         }
-        else
+        else {
             if ( error < -M_PI ) {
                 ROS_WARN("(translation_action node) error < -180 degrees: %f degrees -> %f degrees", error*180/M_PI, (error+2*M_PI)*180/M_PI);
                 error += 2*M_PI;
             }
-
+        }
+        
         cond_rotation = ( fabs(error) > rotation_error );
-
         if ( cond_rotation ) {
-            //TO COMPLETE
             //Implementation of a PID controller for rotation_to_do;
-            float error_derivation;//To complete
+            float error_derivation;
             error_derivation = abs(error - r_error_previous);
+            r_error_previous = error;
             ROS_INFO("error_derivaion: %f", error_derivation);
-
-            r_error_integral += error;//To complete
+            r_error_integral += error;
             ROS_INFO("r_error_integral: %f", r_error_integral);
-
             //control of rotation with a PID controller
             rotation_speed = rkp * error + rki * r_error_integral + rkd * error_derivation;
             ROS_INFO("(translation_action_node) current_orientation: %f, orientation_to_reach: %f -> rotation_speed: %f", rotation_done*180/M_PI, rotation_to_do*180/M_PI, rotation_speed*180/M_PI);
         }
-        else {
+        else { // this will rarely (if ever) run, since now we get new translation to do before finishing current one
             ROS_INFO("(translation_action_node) current_orientation: %f, orientation_to_reach: %f -> rotation_speed: %f", rotation_done*180/M_PI, rotation_to_do*180/M_PI, rotation_speed*180/M_PI);
             rotation_done -= init_orientation;
-
             if ( rotation_done > M_PI ) {
                 rotation_done -= 2*M_PI;
             }
-
             if ( rotation_done < -M_PI ) {
                 rotation_done += 2*M_PI;
             }
-
             ROS_INFO("(translation_action_node) final rotation_done: %f", rotation_done*180/M_PI);
             ROS_INFO("(translation_action_node) waiting for a /rotation_to_do");
-
-            //std_msgs::Float32 msg_rotation_done;
-            //msg_rotation_done.data = rotation_done;
-            //sleep(1);
             r_error_integral = 0;
             r_error_previous = 0;
         }
@@ -204,7 +212,7 @@ void update() {
 
     //ROS_INFO("new_odom: %i, cond_translation: %i, init_obstacle: %i", new_odom, cond_translation, init_obstacle);
              // we receive a new /translation_to_do
-    if ( new_translation_to_do && new_odom ) {
+    /*if ( new_translation_to_do && new_odom ) {
         t_error_integral = 0;
         t_error_previous = 0;
         new_translation_to_do = false;
@@ -215,74 +223,59 @@ void update() {
         start_position.y = current_position.y;
 
         cond_translation = true;
-    }
+        init_obstacle = false;
+
+    }*/
 
     //we are performing a translation
     if ( new_odom && cond_translation && init_obstacle ) {
-        
-        
         float translation_done = distancePoints( start_position, current_position );
         float error = translation_to_do - translation_done;
 
         // the error is the minimum between the difference between /translation_to_do and /translation_done and the distance with the closest obstacle
         if ( error > closest_obstacle.x )
             error = closest_obstacle.x;
-
         bool obstacle_detected = ( fabs(closest_obstacle.x) < security_distance );
-
         if ( obstacle_detected )
             ROS_WARN("obstacle detected: (%f, %f)", closest_obstacle.x, closest_obstacle.y);
-
-
         cond_translation = ( fabs(error) > translation_error ) && !obstacle_detected;
-        float translation_speed = 0;
+        
+        translation_speed = 0;
         if ( cond_translation ) {
-            //TO COMPLETE
-            //Implementation of a PID controller for translation_to_do;
-            
-
-            float error_derivation;//To complete
+            float error_derivation;
             error_derivation = error - t_error_previous;
+            t_error_previous = error; // we didn't have this before...
             ROS_INFO("error_derivaion: %f", error_derivation);
-
-            t_error_integral += error;//To complete
+            t_error_integral += error;
             ROS_INFO("t_error_integral: %f", t_error_integral);
-
             //control of translation with a PID controller
             translation_speed = tkp * error + tki * t_error_integral + tkd * error_derivation;
-
-
-
-
             ROS_INFO("(translation_action_node) translation_done: %f, translation_to_do: %f -> translation_speed: %f", translation_done, translation_to_do, translation_speed);
         }
-        else {
+        else { // this will rarely (if ever) run, since now we get new translation to do before finishing current one
             ROS_INFO("(translation_action_node) translation_done: %f, translation_to_do: %f -> translation_speed: %f", translation_done, translation_to_do, translation_speed);
             translation_done = distancePoints(start_position, current_position);
             ROS_INFO("(translation_action_node) final translation_done: %f", translation_done);
             ROS_INFO("(translation_action_node) waiting for a /translation_to_do");
-
             init_obstacle = false;
 
         }
+        
+        //Publishing translation done
         std_msgs::Float32 msg_translation_done;
         msg_translation_done.data = translation_done;
-
         pub_translation_done.publish(msg_translation_done);
-
-
-
+        
+        //Publishing command to cmd_vel
         geometry_msgs::Twist twist;
         twist.linear.x = translation_speed;//we perform a translation on the x-axis
         twist.linear.y = 0;
         twist.linear.z = 0;
-
         twist.angular.x = 0;
         twist.angular.y = 0;
         twist.angular.z = rotation_speed;
-
         pub_cmd_vel.publish(twist);
-
+        ROS_INFO("X 6-----------------   PUBLISHED TWIST  ---------------6 X");
     }
     new_odom = false;
 
@@ -302,11 +295,12 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr& o) {
 
 }
 
-void translation_to_doCallback(const std_msgs::Float32::ConstPtr & r) {
+void translation_to_doCallback(const geometry_msgs::Point::ConstPtr & r) {
 // process the translation to do received from the decision node
 
     new_translation_to_do = true;
-    translation_to_do = r->data;
+    rotation_to_do = r->x;
+    translation_to_do = r->y;
 
 }
 
@@ -327,15 +321,6 @@ float distancePoints(geometry_msgs::Point pa, geometry_msgs::Point pb) {
 }
 
 
-void rotation_to_doCallback(const std_msgs::Float32::ConstPtr & a) {
-
-    ROS_INFO("rotation got rotation");
-
-    new_rotation_to_do = true;
-    rotation_to_do = a->data;
-
-}
-
 };
 
 
@@ -346,7 +331,6 @@ int main(int argc, char **argv){
     ROS_INFO("(rotation_node) waiting for a /translation_to_do");
     ros::init(argc, argv, "translation_action");
 
-    translation_action rbsObject;
     translation_action tbsObject;
 
     ros::spin();

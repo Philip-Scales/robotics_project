@@ -378,7 +378,6 @@ void detect_moving_persons() {
 
                 if (firstTime) {
                     if (std::hypotf(curPerson.x, curPerson.y) < min_dist) {
-                        firstTime = false;
                         min_dist = std::hypotf(curPerson.x, curPerson.y);
                         goal_to_reach = curPerson;
                     }
@@ -398,6 +397,8 @@ void detect_moving_persons() {
 
         }
     }
+
+                        firstTime = false;
 
     if (distancePoints(goal_to_reach, old_goal_to_reach) < 0.00001) {
         ++cyclesSinceLastDetection;

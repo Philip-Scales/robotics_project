@@ -44,7 +44,7 @@ decision() {
     sub_goal_to_reach = n.subscribe("goal_to_reach", 1, &decision::goal_to_reachCallback, this);
 
     // communication with translation_action
-    pub_translation_to_do = n.advertise<std_msgs::Float32>("translation_to_do", 0);
+    pub_translation_to_do = n.advertise<geometry_msgs::Point>("translation_to_do", 0);
     sub_translation_done = n.subscribe("translation_done", 1, &decision::translation_doneCallback, this);
     cond_translation = false;
 
