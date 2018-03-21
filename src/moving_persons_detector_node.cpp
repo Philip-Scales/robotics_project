@@ -339,6 +339,7 @@ void detect_moving_persons() {
 //    ROS_INFO("detecting moving persons");
     nb_moving_persons_detected = 0;
     float min_dist = 100000.0;
+    bool detected = false;
 
 
     for (int loop_leg1=0; loop_leg1<nb_moving_legs_detected; loop_leg1++) {
@@ -388,19 +389,18 @@ void detect_moving_persons() {
 
                     if (min_dist > LOCK_RADIUS) {
                         goal_to_reach = old_goal_to_reach;
+                    } else {
+                        detected = true;
                     }
                 }
-
-
-
             }
 
         }
     }
 
-                        firstTime = false;
+    firstTime = false;
 
-    if (distancePoints(goal_to_reach, old_goal_to_reach) < 0.00001) {
+    if (!detected) {
         ++cyclesSinceLastDetection;
         ROS_WARN(" ////  cycling in SAME GOAL   /////");
     } else {
