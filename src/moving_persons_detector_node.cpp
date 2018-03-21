@@ -15,11 +15,13 @@
 
 //used for detection of motion
 #define detection_threshold 0.2 //threshold for motion detection
-#define dynamic_threshold 70 //to decide if a cluster is static or dynamic
+#define dynamic_threshold 95 //to decide if a cluster is static or dynamic
 
 //used for detection of moving legs
-#define leg_size_min 0.05
-#define leg_size_max 0.25
+//0.05
+//0.25
+#define leg_size_min 0.03
+#define leg_size_max 0.12
 
 //used for detection of moving persons
 #define legs_distance_max 0.7
@@ -248,6 +250,36 @@ void perform_clustering() {
 
             cluster_size[nb_cluster] = std::hypot(current_scan[loop - 1].x - current_scan[cluster_start[nb_cluster]].x,
                                       current_scan[loop - 1].y - current_scan[cluster_start[nb_cluster]].y);
+
+            int beginSearch = cluster_start[nb_cluster];
+            int endSearch = loop - 1;
+
+            float minX = 10000.0f;
+            float minY = 10000.0f;
+            float maxX = -10000.0f;
+            float maxY = -10000.0f;
+
+            for (int ix = beginSearch; ix < endSearch; ++ix) {
+                auto curScanPoint = current_scan[ix];
+                if (curScanPoint.x < minX) {
+                    minX = curScanPoint.x;
+                }
+
+                if (curScanPoint.x > maxX) {
+                    maxX = curScanPoint.x;
+                }
+
+                if (curScanPoint.y < minY) {
+                    minY = curScanPoint.y;
+                }
+
+                if (curScanPoint.y > maxY) {
+                    maxY = curScanPoint.y;
+                }
+            }
+
+            cluster_size[nb_cluster] = std::max(maxY - minY, maxX - minX);
+
 
             cluster_dynamic[nb_cluster] = static_cast<int>(
                     100.0 * (static_cast<double>(nb_dynamic) / static_cast<double>(loop - cluster_start[nb_cluster])));
