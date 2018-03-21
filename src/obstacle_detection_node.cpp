@@ -66,7 +66,7 @@ obstacle_detection() {
     new_laser = false;
 
     //INFINTE LOOP TO COLLECT LASER DATA AND PROCESS THEM
-    ros::Rate r(50);// this node will run at 10hz
+    ros::Rate r(10);// this node will run at 10hz
     while (ros::ok()) {
         ros::spinOnce();//each callback is called once to collect new data: laser + robot_moving
         update();//processing of data
@@ -79,9 +79,12 @@ obstacle_detection() {
 /*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
 void update() {
-
+    
+    if (!new_laser)
+        ROS_WARN("Waiting for laser data!\n");
+    
     if ( new_laser ) {
-        new_laser = false;
+        //new_laser = false;
         closest_obstacle.x = range_max;
         closest_obstacle.y = range_max;
         bool obstacle_detected = false;

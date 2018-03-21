@@ -22,7 +22,7 @@ using namespace std;
 
 #define rotation_error 0.2//radians
 
-#define security_distance 0.0
+#define security_distance 0.5
 #define translation_error 0.1
 
 //rotation coefs
@@ -219,8 +219,10 @@ void update() {
     
 
     //we are performing a translation
-    //init_obstacle = true;
-    //closest_obstacle.x = 2* security_distance;
+    init_obstacle = true;
+    closest_obstacle.x = 2* security_distance;
+    if (!init_obstacle)
+        ROS_WARN("waiting for callback from obstacle detection!\n");
     if ( new_odom && cond_translation && init_obstacle ) {
         float translation_done = distancePoints( start_position, current_position );
         float error = translation_to_do - translation_done;
