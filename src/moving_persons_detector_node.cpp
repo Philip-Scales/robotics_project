@@ -69,6 +69,8 @@ private:
     int nb_moving_persons_detected;
     geometry_msgs::Point moving_persons_detected[1000];// to store the middle of each moving person
 
+    std::vector<geometry_msgs::Point> old_moving_persons_detected;
+
     //to store the goal to reach that we will be published
     geometry_msgs::Point goal_to_reach;
     geometry_msgs::Point old_goal_to_reach;
@@ -251,6 +253,7 @@ void perform_clustering() {
             cluster_size[nb_cluster] = std::hypot(current_scan[loop - 1].x - current_scan[cluster_start[nb_cluster]].x,
                                       current_scan[loop - 1].y - current_scan[cluster_start[nb_cluster]].y);
 
+#if 0
             int beginSearch = cluster_start[nb_cluster];
             int endSearch = loop - 1;
 
@@ -279,6 +282,7 @@ void perform_clustering() {
             }
 
             cluster_size[nb_cluster] = std::max(maxY - minY, maxX - minX);
+#endif
 
 
             cluster_dynamic[nb_cluster] = static_cast<int>(
@@ -331,7 +335,7 @@ void detect_moving_legs() {
         int currentCluster = loop;
         if ((cluster_size[currentCluster] > leg_size_min)
          && (cluster_size[currentCluster] < leg_size_max)
-         && ((cluster_dynamic[currentCluster] > dynamic_threshold) || !firstTime)) {
+         /*&& ((cluster_dynamic[currentCluster] > dynamic_threshold) || !firstTime)*/) {
 
             // we update the moving_leg_detected table to store the middle of the moving leg
             moving_leg_detected[nb_moving_legs_detected] = cluster_middle[currentCluster];
@@ -405,6 +409,7 @@ void detect_moving_persons() {
                 colors[nb_pts].a = 1.0;
 
                 nb_pts++;
+                ++nb_moving_persons_detected;
 
                 //update of the goal
 
@@ -429,6 +434,55 @@ void detect_moving_persons() {
 
         }
     }
+
+    std::pair<float,geometry_msgs::Point> diffs[1000];
+
+    for (std::size_t ii = 0; ii < old_moving_persons_detected.size(); ++ii) {
+        float minDistance = 10000.0f;
+        int minIx = -1;
+        for (int jj = 0; jj < nb_moving_persons_detected; ++jj) {
+            auto dist = distancePoints(old_moving_persons_detected.at(ii), moving_persons_detected[jj]);
+            if (dist < minDistance) {
+                minDistance = dist;
+                minIx = jj;
+            }
+        }
+        diffs[ii] = std::make_pair(minDistance, moving_persons_detected[minIx]);
+    }
+
+    std::vector<geometry_msgs::Point> saved;
+    for (std::size_t ii = 0; ii < old_moving_persons_detected.size(); ++ii) {
+        if ((diffs[ii].first < 0.05) || (diffs[ii].first > 0.25)) {
+            std::cout << "RRRRRRRRRRRRRRRRRRR " << diffs[ii].first << std::endl;
+        } else {
+            std::cout << "QQQQQQQQQQQQQQQQQQQ " << diffs[ii].first << std::endl;
+
+            saved.push_back(diffs[ii].second);
+        }
+    }
+
+    if (!saved.empty()) {
+
+
+        memset(moving_persons_detected, 0x00, sizeof(moving_persons_detected));
+        std::copy(saved.begin(), saved.end(), std::begin(moving_persons_detected));
+
+        nb_moving_persons_detected = static_cast<int>(saved.size());
+
+    } else {
+        std::cout << " >>>>>>>>>>>>>>>>>>>>>>>>> <<<<<<<<<<<<<<<FFFFFFFFFFFFFF ?" << std::endl;
+    }
+
+    old_moving_persons_detected.clear();
+    std::copy(moving_persons_detected, moving_persons_detected + nb_moving_persons_detected, std::back_inserter(old_moving_persons_detected));
+
+    std::cout << "SSSSSSSSSSSSSSSS " << old_moving_persons_detected.size() << " " << nb_moving_persons_detected << std::endl;
+
+
+
+
+
+
 
     firstTime = false;
 
