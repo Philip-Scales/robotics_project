@@ -163,7 +163,7 @@ void update() {
             if (fabs(goal_to_reach.x) > 0.001 && fabs(goal_to_reach.y) > 0.001) {
                 //to publish the goal_to_reach
                 if (std::hypot(goal_to_reach.x - old_goal_to_reach.x, goal_to_reach.y - old_goal_to_reach.y) > 0.0001) {
-                    ROS_INFO("ACHTUNG");
+                    ROS_WARN("ACHTUNG");
                     old_goal_to_reach = goal_to_reach;
                     display[nb_pts].x = goal_to_reach.x;
                     display[nb_pts].y = goal_to_reach.y;
@@ -402,6 +402,7 @@ void detect_moving_persons() {
 
     if (distancePoints(goal_to_reach, old_goal_to_reach) < 0.00001) {
         ++cyclesSinceLastDetection;
+        ROS_WARN(" ////  cycling in SAME GOAL   /////");
     } else {
         cyclesSinceLastDetection = 0;
     }
@@ -409,6 +410,7 @@ void detect_moving_persons() {
     if (cyclesSinceLastDetection >= lostTimeoutCycles) {
         cyclesSinceLastDetection = 0;
         firstTime = true;
+        ROS_WARN("    !! ! ! ! TIMEOUT  ! ! !! ! ");
     }
 
 

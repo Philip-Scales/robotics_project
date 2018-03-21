@@ -96,7 +96,7 @@ void update() {
             movement_to_do.x = rotation_to_do;
             movement_to_do.y = translation_to_do;
             pub_translation_to_do.publish(movement_to_do);
-            ROS_INFO("(decision_node)after movement publish");
+            ROS_WARN(" ---------------  DECISION PUBLISHED MOVEMENT_TO_DO -------------------");
         }
 
     }

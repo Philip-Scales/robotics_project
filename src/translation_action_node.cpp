@@ -22,18 +22,19 @@ using namespace std;
 
 #define rotation_error 0.2//radians
 
-#define security_distance 0.5
+#define security_distance 0.0
 #define translation_error 0.1
 
 //rotation coefs
-#define rkp 0.78
+#define rkp 0.9
 #define rkd 0.00225
 #define rki -0.003 //029
 
 //translation coefs
 #define tkp 0.5
-#define tki 0.0//0.0012
-#define tkd 0.0//
+#define tki 0.12//0.0012
+#define tkd 0.05//
+
 
 
 class translation_action {
@@ -131,8 +132,6 @@ void update() {
     
     // we receive a new "movement"  (translation) to do
     if ( new_translation_to_do && new_odom ) {
-        ROS_INFO("\n(translation_action_node) processing the /rotation_to_do received from the decision node");
-        ROS_INFO("(translation_action_node) rotation_to_do: %f", rotation_to_do*180/M_PI);
         //reset rotation related stuff
         r_error_integral = 0;
         r_error_previous = 0;
@@ -141,8 +140,16 @@ void update() {
 
         init_orientation = current_orientation;
         rotation_done = current_orientation;
+        
+                //determine scaled translation based on how much rotation there is to do
+        //translation_to_do = std::min((double)translation_to_do, std::max(0.0f, 45-std::fabs(rotation_to_do))/90.0);
+        double normalAngle = (M_PI/2.0);
+        double coeff = std::max(0.0, (normalAngle-std::fabs(rotation_to_do))/normalAngle);
+        translation_to_do = translation_to_do * coeff;
+        
         rotation_to_do += current_orientation;
         
+
         r_error_previous = rotation_to_do;
 
         if ( rotation_to_do > M_PI )
@@ -151,8 +158,6 @@ void update() {
             rotation_to_do += 2*M_PI;
             
         //reset translation related stuff
-        ROS_INFO("\n(translation_action_node) processing the /translation_to_do received from the decision node");
-        ROS_INFO("(translation_action_node) translation_to_do: %f", translation_to_do);
         t_error_integral = 0;
         t_error_previous = 0;
         new_translation_to_do = false;
@@ -161,6 +166,10 @@ void update() {
 
         start_position.x = current_position.x;
         start_position.y = current_position.y;
+        ROS_INFO("\n(translation_action_node) processing the /rotation_to_do received from the decision node");
+        ROS_WARN("(translation_action_node) rotation_to_do: %f", rotation_to_do*180/M_PI);
+        ROS_INFO("\n(translation_action_node) processing the /translation_to_do received from the decision node");
+        ROS_WARN("(translation_action_node) translation_to_do: %f", translation_to_do);
 
 
     }
@@ -209,25 +218,9 @@ void update() {
     }
     
 
-
-    //ROS_INFO("new_odom: %i, cond_translation: %i, init_obstacle: %i", new_odom, cond_translation, init_obstacle);
-             // we receive a new /translation_to_do
-    /*if ( new_translation_to_do && new_odom ) {
-        t_error_integral = 0;
-        t_error_previous = 0;
-        new_translation_to_do = false;
-        ROS_INFO("\n(translation_action_node) processing the /translation_to_do received from the decision node");
-        ROS_INFO("(translation_action_node) translation_to_do: %f", translation_to_do);
-
-        start_position.x = current_position.x;
-        start_position.y = current_position.y;
-
-        cond_translation = true;
-        init_obstacle = false;
-
-    }*/
-
     //we are performing a translation
+    //init_obstacle = true;
+    //closest_obstacle.x = 2* security_distance;
     if ( new_odom && cond_translation && init_obstacle ) {
         float translation_done = distancePoints( start_position, current_position );
         float error = translation_to_do - translation_done;
@@ -275,7 +268,7 @@ void update() {
         twist.angular.y = 0;
         twist.angular.z = rotation_speed;
         pub_cmd_vel.publish(twist);
-        ROS_INFO("X 6-----------------   PUBLISHED TWIST  ---------------6 X");
+        ROS_WARN("X 6-----------------   PUBLISHED TWIST  ---------------6 X");
     }
     new_odom = false;
 
