@@ -15,13 +15,11 @@
 
 //used for detection of motion
 #define detection_threshold 0.2 //threshold for motion detection
-#define dynamic_threshold 95 //to decide if a cluster is static or dynamic
+#define dynamic_threshold 70 //to decide if a cluster is static or dynamic
 
 //used for detection of moving legs
-//0.05
-//0.25
-#define leg_size_min 0.03
-#define leg_size_max 0.12
+#define leg_size_min 0.05
+#define leg_size_max 0.25
 
 //used for detection of moving persons
 #define legs_distance_max 0.7
@@ -69,8 +67,6 @@ private:
     int nb_moving_persons_detected;
     geometry_msgs::Point moving_persons_detected[1000];// to store the middle of each moving person
 
-    std::vector<geometry_msgs::Point> old_moving_persons_detected;
-
     //to store the goal to reach that we will be published
     geometry_msgs::Point goal_to_reach;
     geometry_msgs::Point old_goal_to_reach;
@@ -105,6 +101,17 @@ private:
 
     int cyclesSinceLastDetection = 0;
 
+
+
+    static const constexpr float DEFAULT_RADIUS = 1.0f;
+    static const int DEFAULT_FREQUENCY = 5;
+    static const int MAX_FREQUENCY = 25;
+    int currentFrequency = DEFAULT_FREQUENCY;
+    float radiusRange = DEFAULT_RADIUS;
+    static const constexpr float RADIUS_DELTA = 0.05f;
+    static const constexpr float MIN_RADIUS_RANGE = 0.50f;
+
+
 public:
 
 moving_persons_detector() {
@@ -120,7 +127,7 @@ moving_persons_detector() {
     new_laser = false;
     new_robot = false;
     goal_reached = true;
-    
+
     old_goal_to_reach.x = 1000;
     old_goal_to_reach.y = 1000;
 
@@ -190,8 +197,8 @@ void update() {
 //    else
 //        ROS_INFO("wait for data");
 
-    
-            
+
+
 
 }// update
 
@@ -253,38 +260,6 @@ void perform_clustering() {
             cluster_size[nb_cluster] = std::hypot(current_scan[loop - 1].x - current_scan[cluster_start[nb_cluster]].x,
                                       current_scan[loop - 1].y - current_scan[cluster_start[nb_cluster]].y);
 
-#if 0
-            int beginSearch = cluster_start[nb_cluster];
-            int endSearch = loop - 1;
-
-            float minX = 10000.0f;
-            float minY = 10000.0f;
-            float maxX = -10000.0f;
-            float maxY = -10000.0f;
-
-            for (int ix = beginSearch; ix < endSearch; ++ix) {
-                auto curScanPoint = current_scan[ix];
-                if (curScanPoint.x < minX) {
-                    minX = curScanPoint.x;
-                }
-
-                if (curScanPoint.x > maxX) {
-                    maxX = curScanPoint.x;
-                }
-
-                if (curScanPoint.y < minY) {
-                    minY = curScanPoint.y;
-                }
-
-                if (curScanPoint.y > maxY) {
-                    maxY = curScanPoint.y;
-                }
-            }
-
-            cluster_size[nb_cluster] = std::max(maxY - minY, maxX - minX);
-#endif
-
-
             cluster_dynamic[nb_cluster] = static_cast<int>(
                     100.0 * (static_cast<double>(nb_dynamic) / static_cast<double>(loop - cluster_start[nb_cluster])));
             auto &clMiddle = cluster_middle[nb_cluster];
@@ -335,7 +310,7 @@ void detect_moving_legs() {
         int currentCluster = loop;
         if ((cluster_size[currentCluster] > leg_size_min)
          && (cluster_size[currentCluster] < leg_size_max)
-         /*&& ((cluster_dynamic[currentCluster] > dynamic_threshold) || !firstTime)*/) {
+         && ((cluster_dynamic[currentCluster] > dynamic_threshold) || !firstTime)) {
 
             // we update the moving_leg_detected table to store the middle of the moving leg
             moving_leg_detected[nb_moving_legs_detected] = cluster_middle[currentCluster];
@@ -409,7 +384,6 @@ void detect_moving_persons() {
                 colors[nb_pts].a = 1.0;
 
                 nb_pts++;
-                ++nb_moving_persons_detected;
 
                 //update of the goal
 
@@ -418,13 +392,16 @@ void detect_moving_persons() {
                     if (std::hypotf(curPerson.x, curPerson.y) < min_dist) {
                         min_dist = std::hypotf(curPerson.x, curPerson.y);
                         goal_to_reach = curPerson;
+
+                        radiusRange = DEFAULT_RADIUS;
+                        currentFrequency = DEFAULT_FREQUENCY;
                     }
                 }
                 else if (distancePoints(curPerson, old_goal_to_reach) < min_dist) {
                     min_dist = distancePoints(curPerson, old_goal_to_reach);
                     goal_to_reach = curPerson;
 
-                    if (min_dist > LOCK_RADIUS) {
+                    if (min_dist > radiusRange) {
                         goal_to_reach = old_goal_to_reach;
                     } else {
                         detected = true;
@@ -435,70 +412,39 @@ void detect_moving_persons() {
         }
     }
 
-    std::pair<float,geometry_msgs::Point> diffs[1000];
-
-    for (std::size_t ii = 0; ii < old_moving_persons_detected.size(); ++ii) {
-        float minDistance = 10000.0f;
-        int minIx = -1;
-        for (int jj = 0; jj < nb_moving_persons_detected; ++jj) {
-            auto dist = distancePoints(old_moving_persons_detected.at(ii), moving_persons_detected[jj]);
-            if (dist < minDistance) {
-                minDistance = dist;
-                minIx = jj;
-            }
-        }
-        diffs[ii] = std::make_pair(minDistance, moving_persons_detected[minIx]);
-    }
-
-    std::vector<geometry_msgs::Point> saved;
-    for (std::size_t ii = 0; ii < old_moving_persons_detected.size(); ++ii) {
-        if ((diffs[ii].first < 0.05) || (diffs[ii].first > 0.25)) {
-            std::cout << "RRRRRRRRRRRRRRRRRRR " << diffs[ii].first << std::endl;
-        } else {
-            std::cout << "QQQQQQQQQQQQQQQQQQQ " << diffs[ii].first << std::endl;
-
-            saved.push_back(diffs[ii].second);
-        }
-    }
-
-    if (!saved.empty()) {
-
-
-        memset(moving_persons_detected, 0x00, sizeof(moving_persons_detected));
-        std::copy(saved.begin(), saved.end(), std::begin(moving_persons_detected));
-
-        nb_moving_persons_detected = static_cast<int>(saved.size());
-
-    } else {
-        std::cout << " >>>>>>>>>>>>>>>>>>>>>>>>> <<<<<<<<<<<<<<<FFFFFFFFFFFFFF ?" << std::endl;
-    }
-
-    old_moving_persons_detected.clear();
-    std::copy(moving_persons_detected, moving_persons_detected + nb_moving_persons_detected, std::back_inserter(old_moving_persons_detected));
-
-    std::cout << "SSSSSSSSSSSSSSSS " << old_moving_persons_detected.size() << " " << nb_moving_persons_detected << std::endl;
-
-
-
-
-
-
-
     firstTime = false;
 
     if (!detected) {
         ++cyclesSinceLastDetection;
+
+        if (currentFrequency > 0) {
+            --currentFrequency;
+            radiusRange += RADIUS_DELTA;
+        }
         ROS_WARN(" ////  cycling in SAME GOAL   /////");
     } else {
         cyclesSinceLastDetection = 0;
+
+        if (currentFrequency < MAX_FREQUENCY) {
+            ++currentFrequency;
+        }
+
+        if (radiusRange > MIN_RADIUS_RANGE) {
+            radiusRange -= RADIUS_DELTA;
+        }
     }
 
+    if (0 == currentFrequency) {
+        firstTime = true;
+    }
+
+#if 0
     if (cyclesSinceLastDetection >= lostTimeoutCycles) {
         cyclesSinceLastDetection = 0;
         firstTime = true;
         ROS_WARN("    !! ! ! ! TIMEOUT  ! ! !! ! ");
     }
-
+#endif
 
     if ( nb_moving_persons_detected )
         ROS_INFO("%d moving persons have been detected.\n", nb_moving_persons_detected);
