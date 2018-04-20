@@ -31,9 +31,9 @@ using namespace std;
 #define rki -0.003 //029
 
 //translation coefs
-#define tkp 0.5
-#define tki 0.12//0.0012
-#define tkd 0.05//
+#define tkp 0.4//0.5
+#define tki 0//0.0012
+#define tkd 0.0//005
 
 
 
@@ -103,11 +103,9 @@ translation_action() {
     init_obstacle = false;
 
     // communication with decision
-    pub_translation_done = n.advertise<std_msgs::Float32>("translation_done", 1);
+    pub_translation_done = n.advertise<geometry_msgs::Point>("translation_done", 1);
     sub_translation_to_do = n.subscribe("translation_to_do", 1, &translation_action::translation_to_doCallback, this);//this is the translation that has to be performed
 
-    // communication with obstacle_detection
-    sub_obstacle_detection = n.subscribe("closest_obstacle", 1, &translation_action::closest_obstacleCallback, this);
 
     t_error_integral = 0;
     t_error_previous = 0;
@@ -257,8 +255,9 @@ void update() {
         }
         
         //Publishing translation done
-        std_msgs::Float32 msg_translation_done;
-        msg_translation_done.data = translation_done;
+        geometry_msgs::Point msg_translation_done;
+        msg_translation_done.x = rotation_done;
+        msg_translation_done.y = translation_done;
         pub_translation_done.publish(msg_translation_done);
         
         //Publishing command to cmd_vel
