@@ -6,11 +6,6 @@ echo "Starting nodes..."
 cd ~/catkin_ws
 source devel/setup.bash
 
-read input
-if [ "$input" == "o" ]
-then
-    gnome-terminal -e "bash -c 'rosrun follow_me obstacle_detection_node;/bin/bash'"
-fi
     
 #gnome-terminal -e "bash -c 'rviz'"
 gnome-terminal -e "bash -c 'rosrun follow_me moving_persons_detector_node;/bin/bash'"

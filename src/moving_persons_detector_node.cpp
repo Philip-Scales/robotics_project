@@ -112,7 +112,7 @@ private:
     //! ======================================================================
     bool firstTime = true;
     static const constexpr float LOCK_RADIUS = 1.0f;
-    static const constexpr float LOST_TIMEOUT_SEC = 5.5f;
+    static const constexpr float LOST_TIMEOUT_SEC = 10.5f;
     static const int UPDATE_FREQ_HZ = 10;
 
     int lostTimeoutCycles = 0;
