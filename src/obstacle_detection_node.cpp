@@ -58,7 +58,7 @@ public:
 obstacle_detection() {
 
     // Communication with laser scanner
-    sub_laser = n.subscribe("scan", 1, &obstacle_detection::scanCallback, this);
+    sub_laser = n.subscribe("scan2", 1, &obstacle_detection::scanCallback, this);
 
     // communication with translation_action
     pub_closest_obstacle = n.advertise<geometry_msgs::Point>("closest_obstacle", 1);
