@@ -96,7 +96,7 @@ class decision {
         pub_closest_obstacle_marker = n.advertise<visualization_msgs::Marker>("closest_obstacle", 1);
 
         // Communication with laser scanner for obs dec
-        sub_laser = n.subscribe("scan", 1, &decision::scanCallback, this);
+        sub_laser = n.subscribe("scan2", 1, &decision::scanCallback, this);
 
         // communication with moving_persons_detector or person_tracker
         pub_goal_reached = n.advertise<geometry_msgs::Point>("goal_reached", 1);
@@ -228,10 +228,11 @@ void update() {
     
     //  check the corridor between robair and goal
     //  CLOSEST OBSTACLE IS IN ROBAIR'S COORDINATE FRAME
+#if 0
     closest_obstacle = checkCorridor(goal_angle, goal_distance, robair_size);
     
     float distanceObsGoal = std::hypot(fabs(closest_obstacle.x - goal_to_reach.x), fabs(closest_obstacle.y - goal_to_reach.y));
-    ROS_WARN("''''goal dist = %lf angle %lf\n ,,,,'''''\n"
+
     if (std::hypot(closest_obstacle.x, closest_obstacle.y) < avoidance_distance
         && distanceObsGoal > security_distance+10) {   
         //if (1) {     
@@ -313,7 +314,7 @@ void update() {
         }
     }
     
-
+#endif
     // we receive a new /goal_to_reach and robair is not doing a translation or a rotation
     if ( new_goal_to_reach || avoidance_active) {
 
@@ -373,6 +374,8 @@ void update() {
         new_translation_done = false;
         
         //change goal_to_reach coordinates to reflect rotations and translations done
+
+        // WARNING : Potentially wrong
         goal_to_reach.x -= translation_done.x;
         goal_to_reach.y -= translation_done.y;
         new_goal_to_reach = true;

@@ -112,7 +112,7 @@ private:
     //! ======================================================================
     bool firstTime = true;
     static const constexpr float LOCK_RADIUS = 1.0f;
-    static const constexpr float LOST_TIMEOUT_SEC = 10.5f;
+    static const constexpr float LOST_TIMEOUT_SEC = 5.5f;
     static const int UPDATE_FREQ_HZ = 10;
 
     int lostTimeoutCycles = 0;
@@ -336,7 +336,7 @@ void detect_chests() {
 
             //graphical display
 
-#if 1
+#if 0
             for(int loop2=cluster2.cluster_start[loop]; loop2<=cluster2.cluster_end[loop]; loop2++) {
                 // moving legs are white
                 display[nb_pts].x = current_scan2[loop2].x;
