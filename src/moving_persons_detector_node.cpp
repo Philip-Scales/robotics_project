@@ -10,123 +10,159 @@
 #include <cmath>
 #include "std_msgs/Bool.h"
 
+#define FLOAT_COMP_EPS (0.001f)
+
 //used for clustering
-#define cluster_threshold 0.2 //threshold for clustering
+#define CLUSTER_THRESHOLD_BOTTOM 0.2 //bottom laser threshold
+#define CLUSTER_THRESHOLD_TOP 0.3 //top laser threshold
 
 //used for detection of motion
-#define detection_threshold 0.2 //threshold for motion detection
-#define dynamic_threshold 70 //to decide if a cluster is static or dynamic
+#define DETECTION_THRESHOLD 0.2 //threshold for motion detection
+#define DYNAMIC_THRESHOLD 70 //to decide if a cluster is static or dynamic
 
 //used for detection of moving legs
-#define leg_size_min 0.05
-#define leg_size_max 0.25
+#define LEG_SIZE_MIN 0.05
+#define LEG_SIZE_MAX 0.25
 
-#define chest_size_min 0.20
-#define chest_size_max 0.60
-#define max_distance_between_person_and_chest 0.15
+// used for detection of chests
+#define CHEST_SIZE_MIN 0.20
+#define CHEST_SIZE_MAX 0.60
+
+// the max offset between the point between the legs and the middle of the chest
+#define MAX_DISTANCE_BETWEEN_PERSON_AND_CHEST 0.15
 
 //used for detection of moving persons
-#define legs_distance_max 0.7
-
-#define nbscans 100
+#define LEG_DISTANCE_MAX 0.7
 
 using namespace std;
 
 class moving_persons_detector {
 
 private:
+    static const int MAX_POINTS_PER_SCAN = 1000;
     ros::NodeHandle n;
 
-    ros::Subscriber sub_scan;
-    ros::Subscriber sub_scan2;
-//    ros::Subscriber sub_robot_moving;
-    ros::Subscriber sub_goal_reached;
+    // subscribers for top and bottom lasers
+    ros::Subscriber sub_scan_bottom;
+    ros::Subscriber sub_scan_top;
 
     ros::Publisher pub_moving_persons_detector;
     ros::Publisher pub_moving_persons_detector_marker;
 
     // to store, process and display laserdata
-    int nb_beams1;
-    int nb_beams2;
+
+    //! number of beams from the bottom laser
+    int nb_beams_bottom;
+
+    //! number of beams from the top laser
+    int nb_beams_top;
     float range_min, range_max;
     float angle_min, angle_max, angle_inc;
-    float range[1000];
-    float range2[1000];
-    geometry_msgs::Point current_scan1[1000];
-    geometry_msgs::Point current_scan2[1000];
+    float range_bottom[MAX_POINTS_PER_SCAN];
+    float range_top[MAX_POINTS_PER_SCAN];
+    geometry_msgs::Point current_scan_bottom[MAX_POINTS_PER_SCAN];
+    geometry_msgs::Point current_scan_top[MAX_POINTS_PER_SCAN];
 
     //to perform detection of motion
-    float background[1000];//to store the background
-    bool dynamic[1000];//to store if the current is dynamic or not
+    float background[MAX_POINTS_PER_SCAN];//to store the background
+    bool dynamic[MAX_POINTS_PER_SCAN];//to store if the current is dynamic or not
 
-    //to perform clustering
-
+    //! \struct Cluster_s
+    //! \brief Represents the data that corresponds to a single cluster of points
     struct Cluster_s {
         int nb_cluster;// number of cluster
-        int cluster[1000]; //to store for each hit, the cluster it belongs to
-        float cluster_size[1000];// to store the size of each cluster
-        geometry_msgs::Point cluster_middle[1000];// to store the middle of each cluster
-        int cluster_dynamic[1000];// to store the percentage of the cluster that is dynamic
-        int cluster_start[1000], cluster_end[1000];
+        int cluster[MAX_POINTS_PER_SCAN]; //to store for each hit, the cluster it belongs to
+        float cluster_size[MAX_POINTS_PER_SCAN];// to store the size of each cluster
+        geometry_msgs::Point cluster_middle[MAX_POINTS_PER_SCAN];// to store the middle of each cluster
+        int cluster_dynamic[MAX_POINTS_PER_SCAN];// to store the percentage of the cluster that is dynamic
+        int cluster_start[MAX_POINTS_PER_SCAN], cluster_end[MAX_POINTS_PER_SCAN];
     };
 
-    Cluster_s cluster1;
-    Cluster_s cluster2;
+    //! Cluster of the points obtained from the bottom laser
+    Cluster_s cluster_bottom;
+
+    //! Cluster of the points obtained from the top laser
+    Cluster_s cluster_top;
 
     //to perform detection of moving legs and to store them
     int nb_moving_legs_detected;
     int nb_chests_detected = 0;
-    geometry_msgs::Point moving_leg_detected[1000];// to store the middle of each moving leg
-    geometry_msgs::Point chest_detected[1000];// to store the middle of each moving leg
-    geometry_msgs::Point merged_persons[1000];
+    geometry_msgs::Point moving_leg_detected[MAX_POINTS_PER_SCAN];// to store the middle of each moving leg
+    geometry_msgs::Point chest_detected[MAX_POINTS_PER_SCAN]; // to store the middle of each detected chest
+    geometry_msgs::Point merged_persons[MAX_POINTS_PER_SCAN]; // to store the middle of every detected person
 
-    //to perform detection of moving person and store them
+    //! to perform detection of moving person and store them
+    //! we detect that the person is moving when their legs are moving
     int nb_moving_persons_detected;
-    int nb_merged_persons = 0;
-    geometry_msgs::Point moving_persons_detected[1000];// to store the middle of each moving person
 
-    //to store the goal to reach that we will be published
+    //! number of true persons - the ones for whom we can detect both legs and the chest
+    int nb_merged_persons = 0;
+
+    //! to store the middle of each moving person
+    geometry_msgs::Point moving_persons_detected[MAX_POINTS_PER_SCAN];
+
+    //! track the current goal to reach we will be publishing and the previous
+    //! goal to reach to be able to compare them
     geometry_msgs::Point goal_to_reach;
     geometry_msgs::Point old_goal_to_reach;
 
 
     // GRAPHICAL DISPLAY
+
+    //! number of markers we want to put
     int nb_pts;
+
+    //! positions of the markers
     geometry_msgs::Point display[2000];
+
+    //! colors of the markers
     std_msgs::ColorRGBA colors[2000];
 
-    //to check if the robot is moving or not
-    bool previous_robot_moving;
-    bool current_robot_moving;
-
-    bool new_laser;//to check if new data of laser is available or not
-    bool new_robot;//to check if new data of robot_moving is available or not
-    bool goal_reached;
+    //! to check if new data of laser is available or not
+    bool new_laser;
 
 
+    /// PERSON TRACKING
+    /// Here, number of cycles === number of times the update function has been called
 
+    //! Whether it is the first time we detect a person; this variable will also
+    //! become \c true when we lose the previous person and try to find a new goal
+    bool firstTimePersonDetected = true;
 
-
-
-
-    //! ======================================================================
-    bool firstTime = true;
-    static const constexpr float LOCK_RADIUS = 1.0f;
+    //! The time period after which we consider that we lost a person
     static const constexpr float LOST_TIMEOUT_SEC = 5.5f;
+
+    //! ROS node update frequency
     static const int UPDATE_FREQ_HZ = 10;
 
+    //! number of cycles after which we consider that we lost a person
     int lostTimeoutCycles = 0;
 
+    //! number of cycles that elapsed since the last time we detected someone
     int cyclesSinceLastDetection = 0;
 
 
-
+    //! the initial value of the radius that we consider when we detect someone
     static const constexpr float DEFAULT_RADIUS = 1.0f;
+
+    //! the default degree of certainity that the person is inside the circle around
+    //! their last known position
     static const int DEFAULT_FREQUENCY = 5;
+
+    //! maximum degree of certainity that the person is inside the circle around
+    //! their last known position
     static const int MAX_FREQUENCY = 25;
+
+    //! current degree of certainity that the person is inside the circle
     int currentFrequency = DEFAULT_FREQUENCY;
+
+    //! current radius of the circle around the person that we consider
     float radiusRange = DEFAULT_RADIUS;
-    static const constexpr float RADIUS_DELTA = 0.2f;
+
+    //! value by which the radius can change per cycle
+    static const constexpr float RADIUS_DELTA = 0.15f;
+
+    //! the minimum radius of the circle around the person
     static const constexpr float MIN_RADIUS_RANGE = 0.50f;
 
 
@@ -134,18 +170,16 @@ public:
 
 moving_persons_detector() {
 
-    sub_scan = n.subscribe("scan2", 1, &moving_persons_detector::scanCallback, this);
-    sub_scan2 = n.subscribe("scan1", 1, &moving_persons_detector::scan2Callback, this);
-//    sub_robot_moving = n.subscribe("robot_moving", 1, &moving_persons_detector::robot_movingCallback, this);
-    sub_goal_reached = n.subscribe("goal_reached", 1, &moving_persons_detector::goal_reachedCallback, this);
+    //! Subscription for the callback of the bottom laser scanner
+    sub_scan_bottom = n.subscribe("scan2", 1, &moving_persons_detector::scanBottomCallback, this);
+
+    //! Subscription for the callback of the top laser scanner
+    sub_scan_top = n.subscribe("scan1", 1, &moving_persons_detector::scanTopCallback, this);
 
     pub_moving_persons_detector_marker = n.advertise<visualization_msgs::Marker>("moving_persons_detector", 1); // Preparing a topic to publish our results. This will be used by the visualization tool rviz
     pub_moving_persons_detector = n.advertise<geometry_msgs::Point>("goal_to_reach", 1);     // Preparing a topic to publish the goal to reach.
 
-    current_robot_moving = true;
     new_laser = false;
-    new_robot = false;
-    goal_reached = true;
 
     old_goal_to_reach.x = 1000;
     old_goal_to_reach.y = 1000;
@@ -155,7 +189,7 @@ moving_persons_detector() {
     //INFINTE LOOP TO COLLECT LASER DATA AND PROCESS THEM
     ros::Rate r(UPDATE_FREQ_HZ);// this node will run at 10hz
     while (ros::ok()) {
-        ros::spinOnce();//each callback is called once to collect new data: laser + robot_moving
+        ros::spinOnce();//each callback is called once to collect new data: laser
         update();//processing of data
         r.sleep();//we wait if the processing (ie, callback+update) has taken less than 0.1s (ie, 10 hz)
     }
@@ -167,61 +201,45 @@ moving_persons_detector() {
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
 void update() {
 
-    goal_reached = false;
-    // we wait for new data of the laser and of the robot_moving_node to perform laser processing
+    // we wait for new data of the laser to perform laser processing
     if ( new_laser ) {
         new_laser = false;
-        new_robot = false;
         nb_pts = 0;
 
-        //if the robot is not moving then we can perform moving persons detection
-        if ( 1 ) {
+        // TODO: Describe steps here
+        detect_motion();//to classify each hit of the laser as dynamic or not
 
-            ROS_INFO("robot is not moving");
-            // if the robot was moving previously and now it is not moving now then we store the background
-//            if ( previous_robot_moving && !current_robot_moving )
-//                store_background();
+        //! perform clustering for bottom and top laser scanners
+        perform_clustering(cluster_bottom, current_scan_bottom, CLUSTER_THRESHOLD_BOTTOM, nb_beams_bottom);
+        perform_clustering(cluster_top, current_scan_top, CLUSTER_THRESHOLD_TOP, nb_beams_top);
+        detect_moving_legs();//to detect moving legs using cluster
+        detect_moving_persons();//to detect moving_persons using moving legs detected
+        detect_chests();
+        merge_chests_and_persons();
+        select_goal_to_reach();
 
-            //we search for moving persons in 4 steps
-            detect_motion();//to classify each hit of the laser as dynamic or not
-            perform_clustering(cluster1, current_scan1, cluster_threshold, nb_beams1);//to perform clustering
-            perform_clustering(cluster2, current_scan2, 0.30, nb_beams2);
-            detect_moving_legs();//to detect moving legs using cluster
-            detect_moving_persons();//to detect moving_persons using moving legs detected
-            detect_chests();
-            merge_chests_and_persons();
-            select_goal_to_reach();
+        //graphical display of the results
 
-            //graphical display of the results
+        if (fabs(goal_to_reach.x) > FLOAT_COMP_EPS && fabs(goal_to_reach.y) > FLOAT_COMP_EPS) {
+            //to publish the goal_to_reach
+            if (std::hypot(goal_to_reach.x - old_goal_to_reach.x, goal_to_reach.y - old_goal_to_reach.y) > 0.0001) {
+                old_goal_to_reach = goal_to_reach;
+                display[nb_pts].x = goal_to_reach.x;
+                display[nb_pts].y = goal_to_reach.y;
 
-            if (fabs(goal_to_reach.x) > 0.001 && fabs(goal_to_reach.y) > 0.001) {
-                //to publish the goal_to_reach
-                if (std::hypot(goal_to_reach.x - old_goal_to_reach.x, goal_to_reach.y - old_goal_to_reach.y) > 0.0001) {
-                    ROS_WARN("ACHTUNG");
-                    old_goal_to_reach = goal_to_reach;
-                    display[nb_pts].x = goal_to_reach.x;
-                    display[nb_pts].y = goal_to_reach.y;
+                colors[nb_pts].r = 1.0;
+                colors[nb_pts].g = 0.6;
+                colors[nb_pts].b = 0.0;
 
-                    colors[nb_pts].r = 1.0;
-                    colors[nb_pts].g = 0.6;
-                    colors[nb_pts].b = 0.0;
+                ++nb_pts;
 
-                    ++nb_pts;
-
-                    pub_moving_persons_detector.publish(goal_to_reach);
-                }
+                pub_moving_persons_detector.publish(goal_to_reach);
             }
-            populateMarkerTopic();
         }
-//        else
-//            ROS_INFO("robot is moving");
-//        ROS_INFO("\n");
+        populateMarkerTopic();
+
+
     }
-//    else
-//        ROS_INFO("wait for data");
-
-
-
 
 }// update
 
@@ -231,19 +249,15 @@ void update() {
 void store_background() {
 // store all the hits of the laser in the background table
 
-    ROS_INFO("storing background");
-
-    for (int loop=0; loop<nb_beams1; loop++)
-        background[loop] = range[loop];
+    for (int loop = 0; loop < nb_beams_bottom; ++loop)
+        background[loop] = range_bottom[loop];
 
 }//init_background
 
 void detect_motion() {
 
-    ROS_INFO("detecting motion");
-
-    for (int loop=0; loop<nb_beams1; loop++ ) {
-        if (std::abs(background[loop] - range[loop]) > detection_threshold) {
+    for (int loop = 0; loop < nb_beams_bottom; ++loop ) {
+        if (std::abs(background[loop] - range_bottom[loop]) > DETECTION_THRESHOLD) {
             dynamic[loop] = 1;//the current hit is dynamic
         } else {
             dynamic[loop] = 0;//else its static
@@ -262,8 +276,6 @@ void perform_clustering(Cluster_s &cluster_ref, geometry_msgs::Point *current_sc
 //then the current hit belongs to the current cluster
 //else we start a new cluster with the current hit and end the current cluster
 
-    ROS_INFO("performing clustering");
-
     cluster_ref.nb_cluster = 0;//to count the number of cluster
 
     //initialization of the first cluster
@@ -271,7 +283,7 @@ void perform_clustering(Cluster_s &cluster_ref, geometry_msgs::Point *current_sc
     cluster_ref.cluster[0] = 0;// the first hit belongs to the first cluster
     int nb_dynamic = 0;// to count the number of hits of the current cluster that are dynamic
 
-    for( int loop=1; loop<nb_beams; loop++ ) {//loop over all the hits
+    for( int loop = 1; loop < nb_beams; ++loop ) {//loop over all the hits
         auto curScan = current_scan[loop];
         auto prevScan = current_scan[loop - 1];
         if ((loop != nb_beams - 1) && (std::hypot(curScan.x - prevScan.x, curScan.y - prevScan.y) < threshold)) {
@@ -289,28 +301,14 @@ void perform_clustering(Cluster_s &cluster_ref, geometry_msgs::Point *current_sc
             clMiddle.x = 0.5 * (current_scan[loop - 1].x + current_scan[cluster_ref.cluster_start[cluster_ref.nb_cluster]].x);
             clMiddle.y = 0.5 * (current_scan[loop - 1].y + current_scan[cluster_ref.cluster_start[cluster_ref.nb_cluster]].y);
 
-            /*
-              1/ we end the current cluster, so we update:
-              - cluster-end to store the last hit of the current cluster
-              - cluster_dynamic to store the percentage of hits of the current cluster that are dynamic
-              - cluster_size to store the size of the cluster ie, the distance between the first hit of the cluster and the last one
-              - cluster_middle to store the middle of the cluster
-            */
-            //textual display
-            ROS_INFO("cluster[%i]: (%f, %f) -> (%f, %f), size: %f, dynamic: %i", cluster_ref.nb_cluster,
-                     current_scan[cluster_ref.cluster_start[cluster_ref.nb_cluster]].x, current_scan[cluster_ref.cluster_start[cluster_ref.nb_cluster]].y,
-                     current_scan[cluster_ref.cluster_end[cluster_ref.nb_cluster]].x, current_scan[cluster_ref.cluster_end[cluster_ref.nb_cluster]].y,
-                     cluster_ref.cluster_size[cluster_ref.nb_cluster], cluster_ref.cluster_dynamic[cluster_ref.nb_cluster]);
-
-            //2/ we starta new cluster with the current hit
             nb_dynamic = 0;// to count the number of hits of the current cluster that are dynamic
             cluster_ref.nb_cluster++;
             cluster_ref.cluster_start[cluster_ref.nb_cluster] = loop;
             cluster_ref.cluster[loop] = cluster_ref.nb_cluster;
 
         }
-        if ( dynamic[loop] ) {
-            nb_dynamic++;
+        if (dynamic[loop]) {
+            ++nb_dynamic;
         }
     }
 
@@ -322,43 +320,36 @@ void perform_clustering(Cluster_s &cluster_ref, geometry_msgs::Point *current_sc
 void detect_chests() {
     nb_chests_detected = 0;
 
-    for (int loop=0; loop<cluster2.nb_cluster; loop++) {
+    for (int loop = 0; loop < cluster_top.nb_cluster; ++loop) {
         int currentCluster = loop;
-        if ((cluster2.cluster_size[currentCluster] > chest_size_min)
-         && (cluster2.cluster_size[currentCluster] < chest_size_max)
+        if ((cluster_top.cluster_size[currentCluster] > CHEST_SIZE_MIN)
+         && (cluster_top.cluster_size[currentCluster] < CHEST_SIZE_MAX)
         ) {
 
             // we update the moving_leg_detected table to store the middle of the moving leg
-            chest_detected[nb_chests_detected] = cluster2.cluster_middle[currentCluster];
+            chest_detected[nb_chests_detected] = cluster_top.cluster_middle[currentCluster];
             ++nb_chests_detected;
-            //textual display
-            ROS_INFO("chest detected[%i]: cluster[%i]", nb_moving_legs_detected, loop);
 
-            //graphical display
-
-#if 0
-            for(int loop2=cluster2.cluster_start[loop]; loop2<=cluster2.cluster_end[loop]; loop2++) {
+            //! Displays every point that belongs to the chest cluster in blue
+#if 1
+            for(int loop2 = cluster_top.cluster_start[loop]; loop2 <= cluster_top.cluster_end[loop]; ++loop2) {
                 // moving legs are white
-                display[nb_pts].x = current_scan2[loop2].x;
-                display[nb_pts].y = current_scan2[loop2].y;
-                display[nb_pts].z = current_scan2[loop2].z;
+                display[nb_pts].x = current_scan_top[loop2].x;
+                display[nb_pts].y = current_scan_top[loop2].y;
+                display[nb_pts].z = current_scan_top[loop2].z;
 
                 colors[nb_pts].r = 0;
                 colors[nb_pts].g = 0.0;
                 colors[nb_pts].b = 1.0;
                 colors[nb_pts].a = 1.0;
 
-                nb_pts++;
+                ++nb_pts;
             }
 #endif
         }
 
 
 
-    }
-
-    if ( nb_chests_detected ) {
-        ROS_INFO("%d chests detected.\n", nb_chests_detected);
     }
 }
 
@@ -367,110 +358,70 @@ void detect_chests() {
 /*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
 void detect_moving_legs() {
-// a moving leg is a cluster:
-// - with a size higher than "leg_size_min";
-// - with a size lower than "leg_size_max;
-// - more than "dynamic_threshold"% of its hits are dynamic (see, cluster_dynamic table)
 
-//    ROS_INFO("detecting moving legs");
     nb_moving_legs_detected = 0;
 
-    for (int loop=0; loop<cluster1.nb_cluster; loop++) {
+    for (int loop = 0; loop < cluster_bottom.nb_cluster; ++loop) {
         int currentCluster = loop;
-        if ((cluster1.cluster_size[currentCluster] > leg_size_min)
-         && (cluster1.cluster_size[currentCluster] < leg_size_max)
-         && ((cluster1.cluster_dynamic[currentCluster] > dynamic_threshold) || !firstTime)) {
+        if ((cluster_bottom.cluster_size[currentCluster] > LEG_SIZE_MIN)
+         && (cluster_bottom.cluster_size[currentCluster] < LEG_SIZE_MAX)
+         && ((cluster_bottom.cluster_dynamic[currentCluster] > DYNAMIC_THRESHOLD) || !firstTimePersonDetected)) {
 
             // we update the moving_leg_detected table to store the middle of the moving leg
-            moving_leg_detected[nb_moving_legs_detected] = cluster1.cluster_middle[currentCluster];
+            moving_leg_detected[nb_moving_legs_detected] = cluster_bottom.cluster_middle[currentCluster];
             ++nb_moving_legs_detected;
-            //textual display
-            ROS_INFO("moving leg detected[%i]: cluster[%i]", nb_moving_legs_detected, loop);
 
-            //graphical display
-            for(int loop2=cluster1.cluster_start[loop]; loop2<=cluster1.cluster_end[loop]; loop2++) {
-                // moving legs are white
-                display[nb_pts].x = current_scan1[loop2].x;
-                display[nb_pts].y = current_scan1[loop2].y;
-                display[nb_pts].z = current_scan1[loop2].z;
+            //! Display a marker for every point that belong to leg cluster
+            for (int loop2 = cluster_bottom.cluster_start[loop]; loop2 <= cluster_bottom.cluster_end[loop]; ++loop2) {
+                // moving legs are dark red
+                display[nb_pts].x = current_scan_bottom[loop2].x;
+                display[nb_pts].y = current_scan_bottom[loop2].y;
+                display[nb_pts].z = current_scan_bottom[loop2].z;
 
                 colors[nb_pts].r = 0.6;
                 colors[nb_pts].g = 0;
                 colors[nb_pts].b = 0;
                 colors[nb_pts].a = 1.0;
 
-                nb_pts++;
+                ++nb_pts;
             }
         }
-
-
-
     }
-
-    if ( nb_moving_legs_detected ) {
-        ROS_INFO("%d moving legs have been detected.\n", nb_moving_legs_detected);
-    }
-
-}//detect_moving_legs
+}
 
 void detect_moving_persons() {
-    // a moving person has two moving legs located at less than "legs_distance_max" one from the other
+    //! a moving person has two moving legs located at less than "legs_distance_max" one from the other
 
-//    ROS_INFO("detecting moving persons");
     nb_moving_persons_detected = 0;
 
-
-
-    for (int loop_leg1=0; loop_leg1<nb_moving_legs_detected; loop_leg1++) {
-        for (int loop_leg2=loop_leg1+1; loop_leg2<nb_moving_legs_detected; loop_leg2++) {
-            //            if the distance between two moving legs is lower than "legs_distance_max"
-
-
-            //            then we find a moving person
+    //! if the distance between two moving legs is lower than "legs_distance_max"
+    //! then we find a moving person
+    for (int loop_leg1 = 0; loop_leg1 < nb_moving_legs_detected; ++loop_leg1) {
+        for (int loop_leg2 = loop_leg1 + 1; loop_leg2 < nb_moving_legs_detected; ++loop_leg2) {
 
             if (std::hypot(moving_leg_detected[loop_leg1].x - moving_leg_detected[loop_leg2].x,
-                           moving_leg_detected[loop_leg1].y - moving_leg_detected[loop_leg2].y) < legs_distance_max) {
-                // we update the moving_persons_detected table to store the middle of the moving person
+                           moving_leg_detected[loop_leg1].y - moving_leg_detected[loop_leg2].y) < LEG_DISTANCE_MAX) {
+                //! we update the moving_persons_detected table to store the middle of the moving person
                 auto &curPerson = moving_persons_detected[nb_moving_persons_detected];
                 curPerson.x = 0.5 * (moving_leg_detected[loop_leg1].x + moving_leg_detected[loop_leg2].x);
                 curPerson.y = 0.5 * (moving_leg_detected[loop_leg1].y + moving_leg_detected[loop_leg2].y);
                 ++nb_moving_persons_detected;
-
-
-
             }
-
         }
     }
-
-
-
-#if 0
-    if (cyclesSinceLastDetection >= lostTimeoutCycles) {
-        cyclesSinceLastDetection = 0;
-        firstTime = true;
-        ROS_WARN("    !! ! ! ! TIMEOUT  ! ! !! ! ");
-    }
-#endif
-
-    if ( nb_moving_persons_detected )
-        ROS_INFO("%d moving persons have been detected.\n", nb_moving_persons_detected);
-
-}//detect_moving_persons
+}
 
 
 
 void merge_chests_and_persons() {
     int kk = 0;
 
-    std::cout << "NUMBER OF PERSONS CHESTS " << nb_moving_persons_detected << " " << nb_chests_detected << std::endl;
-
     for (int ii = 0; ii < nb_moving_persons_detected; ++ii) {
         for (int jj = 0; jj < nb_chests_detected; ++jj) {
             geometry_msgs::Point person = moving_persons_detected[ii];
             geometry_msgs::Point chest  = chest_detected[jj];
 
-            if (distancePoints(person, chest) < max_distance_between_person_and_chest) {
+            if (distancePoints(person, chest) < MAX_DISTANCE_BETWEEN_PERSON_AND_CHEST) {
                 merged_persons[kk] = person;
                 ++kk;
             }
@@ -485,41 +436,32 @@ void select_goal_to_reach() {
     float min_dist = 100000.0;
     bool detected = false;
 
-    std::cout << "NUMBER OF MERGED PERSONS " << nb_merged_persons << std::endl;
-
     for (int ii = 0; ii < nb_merged_persons; ++ii) {
 
         auto curPerson = merged_persons[ii];
-
-        if (firstTime) {
+        //! First time detecting a person
+        if (firstTimePersonDetected) {
             if (std::hypotf(curPerson.x, curPerson.y) < min_dist) {
                 min_dist = std::hypotf(curPerson.x, curPerson.y);
                 goal_to_reach = curPerson;
-
                 radiusRange = DEFAULT_RADIUS;
                 currentFrequency = DEFAULT_FREQUENCY;
             }
         }
+        //! choosing a person closest to last detection
         else if (distancePoints(curPerson, old_goal_to_reach) < min_dist) {
             min_dist = distancePoints(curPerson, old_goal_to_reach);
             goal_to_reach = curPerson;
-
+            //! person was detected outside circle
             if (min_dist > radiusRange) {
                 goal_to_reach = old_goal_to_reach;
             } else {
                 detected = true;
-
-                // Reset the radius ?
                 radiusRange = MIN_RADIUS_RANGE;
             }
         }
 
-        ROS_INFO("MERGED PERSON detected[%i]: -> (%f, %f)",
-                 ii,
-                 curPerson.x,
-                 curPerson.y);
-
-        // the moving persons are green
+        //! the moving persons are green
         display[nb_pts].x = moving_persons_detected[nb_moving_persons_detected].x;
         display[nb_pts].y = moving_persons_detected[nb_moving_persons_detected].y;
         display[nb_pts].z = moving_persons_detected[nb_moving_persons_detected].z;
@@ -529,20 +471,19 @@ void select_goal_to_reach() {
         colors[nb_pts].b = 0;
         colors[nb_pts].a = 1.0;
 
-        nb_pts++;
+        ++nb_pts;
 
     }
 
-    firstTime = false;
-
+    firstTimePersonDetected = false;
+    //! if no person detected within the circle: increase radius, decrease frequency
     if (!detected) {
         ++cyclesSinceLastDetection;
-
         if (currentFrequency > 0) {
             --currentFrequency;
             radiusRange += RADIUS_DELTA;
         }
-        ROS_WARN(" ////  cycling in SAME GOAL   /////");
+    //! if person found in circle: increase frequency, decrease radius
     } else {
         cyclesSinceLastDetection = 0;
 
@@ -554,20 +495,18 @@ void select_goal_to_reach() {
             radiusRange -= RADIUS_DELTA;
         }
     }
-
+    //! officially lost track of person
     if (0 == currentFrequency) {
-        firstTime = true;
+        firstTimePersonDetected = true;
     }
-
-
 
 }
 
 
-//CALLBACKS
+//! CALLBACKS
 /*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
-void scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan) {
+void scanBottomCallback(const sensor_msgs::LaserScan::ConstPtr& scan) {
 
     new_laser = true;
     // store the important data related to laserscanner
@@ -576,35 +515,26 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan) {
     angle_min = scan->angle_min;
     angle_max = scan->angle_max;
     angle_inc = scan->angle_increment;
-    nb_beams1 = ((-1 * angle_min) + angle_max)/angle_inc;
-
-    ROS_INFO("New data of laser received");
-    ROS_INFO("range_min, range_max: %f, %f", range_min, range_max);
-    ROS_INFO("angle_min: %f", angle_min*180/M_PI);
-    ROS_INFO("angle_max: %f", angle_max*180/M_PI);
-    ROS_INFO("angle_increment: %f", angle_inc*180/M_PI);
-    ROS_INFO("number_of_beams: %d", nb_beams1);
+    nb_beams_bottom = ((-1 * angle_min) + angle_max)/angle_inc;
 
     // store the range and the coordinates in cartesian framework of each hit
     float beam_angle = angle_min;
-    for ( int loop=0 ; loop < nb_beams1; loop++, beam_angle += angle_inc ) {
-        if ( ( scan->ranges[loop] < range_max ) && ( scan->ranges[loop] > range_min ) )
-            range[loop] = scan->ranges[loop];
+    for (int loop = 0; loop < nb_beams_bottom; ++loop, beam_angle += angle_inc) {
+        if ((scan->ranges[loop] < range_max) && (scan->ranges[loop] > range_min))
+            range_bottom[loop] = scan->ranges[loop];
         else
-            range[loop] = range_max;
+            range_bottom[loop] = range_max;
 
         //transform the scan in cartesian framework
-        current_scan1[loop].x = range[loop] * cos(beam_angle);
-        current_scan1[loop].y = range[loop] * sin(beam_angle);
-        current_scan1[loop].z = 0.0;
+        current_scan_bottom[loop].x = range_bottom[loop] * cos(beam_angle);
+        current_scan_bottom[loop].y = range_bottom[loop] * sin(beam_angle);
+        current_scan_bottom[loop].z = 0.0;
     }
 
-}//scanCallback
+}
 
 
-
-
-void scan2Callback(const sensor_msgs::LaserScan::ConstPtr& scan) {
+void scanTopCallback(const sensor_msgs::LaserScan::ConstPtr& scan) {
 
     new_laser = true;
     // store the important data related to laserscanner
@@ -613,58 +543,36 @@ void scan2Callback(const sensor_msgs::LaserScan::ConstPtr& scan) {
     angle_min = scan->angle_min;
     angle_max = scan->angle_max;
     angle_inc = scan->angle_increment;
-    nb_beams2 = ((-1 * angle_min) + angle_max)/angle_inc;
-
-    ROS_INFO("New data of laser received");
-    ROS_INFO("range_min, range_max: %f, %f", range_min, range_max);
-    ROS_INFO("angle_min: %f", angle_min*180/M_PI);
-    ROS_INFO("angle_max: %f", angle_max*180/M_PI);
-    ROS_INFO("angle_increment: %f", angle_inc*180/M_PI);
-    ROS_INFO("number_of_beams: %d", nb_beams2);
+    nb_beams_top = ((-1 * angle_min) + angle_max)/angle_inc;
 
     float beam_angle = angle_min;
-    for ( int loop=0 ; loop < nb_beams2; loop++, beam_angle += angle_inc ) {
-        if ( ( scan->ranges[loop] < range_max ) && ( scan->ranges[loop] > range_min ) )
-            range2[loop] = scan->ranges[loop];
-        else
-            range2[loop] = range_max;
+    for (int loop = 0 ; loop < nb_beams_top; ++loop, beam_angle += angle_inc) {
+        if ((scan->ranges[loop] < range_max) && (scan->ranges[loop] > range_min)) {
+            range_top[loop] = scan->ranges[loop];
+        } else {
+            range_top[loop] = range_max;
+        }
 
         //transform the scan in cartesian framework
-        current_scan2[loop].x = range2[loop] * cos(beam_angle);// + 0.16;
-        current_scan2[loop].y = range2[loop] * sin(beam_angle) - 0.25;
-        current_scan2[loop].z = 0.0;
+        // Apply correction to compensate for the top laser displacement
+        current_scan_top[loop].x = range_top[loop] * cos(beam_angle);
+        current_scan_top[loop].y = range_top[loop] * sin(beam_angle) - 0.25;
+        current_scan_top[loop].z = 0.0;
     }
-}//scanCallback
+}
 
 
-#if 0
-void robot_movingCallback(const std_msgs::Bool::ConstPtr& state) {
-
-    new_robot = true;
-    ROS_INFO("New data of robot_moving received");
-    previous_robot_moving = current_robot_moving;
-    current_robot_moving = state->data;
-
-}//robot_movingCallback
-#endif
-
-void goal_reachedCallback(const geometry_msgs::Point::ConstPtr& g) {
-
-    goal_reached = true;
-    ROS_INFO("___ **  GOAL REACHED CALLBACK ** ____");
-
-}//goal_reachedCallback
-
-
-
-// Distance between two points
+//! Utilities
+/*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
+//! Distance between two points
 float distancePoints(geometry_msgs::Point pa, geometry_msgs::Point pb) {
 
-    return sqrt(pow((pa.x-pb.x),2.0) + pow((pa.y-pb.y),2.0));
+    return sqrt(pow((pa.x - pb.x), 2.0) + pow((pa.y - pb.y), 2.0));
 
 }
 
-// Draw the field of view and other references
+//! Display the field of view and other references on RVIZ
 void populateMarkerReference() {
 
     visualization_msgs::Marker references;
@@ -685,32 +593,32 @@ void populateMarkerReference() {
     references.color.a = 1.0;
     geometry_msgs::Point v;
 
-    v.x =  0.02 * cos(-2.356194);
-    v.y =  0.02 * sin(-2.356194);
+    v.x = 0.02 * cos(-2.356194);
+    v.y = 0.02 * sin(-2.356194);
     v.z = 0.0;
     references.points.push_back(v);
 
-    v.x =  5.6 * cos(-2.356194);
-    v.y =  5.6 * sin(-2.356194);
+    v.x = 5.6 * cos(-2.356194);
+    v.y = 5.6 * sin(-2.356194);
     v.z = 0.0;
     references.points.push_back(v);
 
     float beam_angle = -2.356194 + 0.006136;
     // first and last beam are already included
-    for (int i=0 ; i< 723; i++, beam_angle += 0.006136){
-        v.x =  5.6 * cos(beam_angle);
-        v.y =  5.6 * sin(beam_angle);
+    for (int i = 0; i < 723; ++i, beam_angle += 0.006136){
+        v.x = 5.6 * cos(beam_angle);
+        v.y = 5.6 * sin(beam_angle);
         v.z = 0.0;
         references.points.push_back(v);
     }
 
-    v.x =  5.6 * cos(2.092350);
-    v.y =  5.6 * sin(2.092350);
+    v.x = 5.6 * cos(2.092350);
+    v.y = 5.6 * sin(2.092350);
     v.z = 0.0;
     references.points.push_back(v);
 
-    v.x =  0.02 * cos(2.092350);
-    v.y =  0.02 * sin(2.092350);
+    v.x = 0.02 * cos(2.092350);
+    v.y = 0.02 * sin(2.092350);
     v.z = 0.0;
     references.points.push_back(v);
 
@@ -736,8 +644,7 @@ void populateMarkerTopic(){
 
     marker.color.a = 1.0;
 
-    //ROS_INFO("%i points to display", nb_pts);
-    for (int loop = 0; loop < nb_pts; loop++) {
+    for (int loop = 0; loop < nb_pts; ++loop) {
             geometry_msgs::Point p;
             std_msgs::ColorRGBA c;
 
@@ -750,7 +657,6 @@ void populateMarkerTopic(){
             c.b = colors[loop].b;
             c.a = colors[loop].a;
 
-            //ROS_INFO("(%f, %f, %f) with rgba (%f, %f, %f, %f)", p.x, p.y, p.z, c.r, c.g, c.b, c.a);
             marker.points.push_back(p);
             marker.colors.push_back(c);
         }

@@ -26,12 +26,12 @@ using namespace std;
 #define translation_error 0.1
 
 //rotation coefs
-#define rkp 0.9
+#define rkp 0.75
 #define rkd 0.00225
 #define rki -0.003 //029
 
 //translation coefs
-#define tkp 0.4//0.5
+#define tkp 0.5
 #define tki 0//0.0012
 #define tkd 0.0//005
 

@@ -161,8 +161,6 @@ void update() {
     
     //sleep(0.3);
     
-    goal_to_reach.x = 1.5;
-    goal_to_reach.y = 0.;
     //check area immediately in front of robair, as in original
     geometry_msgs::Point closest_obstacle = checkCorridor(0,range_max, robair_size);
     if ((obstacle_detected)) {
@@ -204,7 +202,7 @@ void update() {
         geometry_msgs::Point movement_to_do;
         
         movement_to_do.x = 0.0; //translation
-        //movement_to_do.y = 0.0; //rotation
+        movement_to_do.y = 0.0; //rotation
         pub_translation_to_do.publish(movement_to_do);
         ROS_WARN(" ---------------  DECISION PUBLISHED STOP (OBS) -------------------");
         return;
@@ -316,7 +314,7 @@ void update() {
     
 #endif
     // we receive a new /goal_to_reach and robair is not doing a translation or a rotation
-    if ( new_goal_to_reach || avoidance_active) {
+    if ( new_goal_to_reach) {
 
         //ROS_INFO("(decision_node) /goal_to_reach received: (%f, %f)", goal_to_reach.x, goal_to_reach.y);
 
@@ -372,13 +370,6 @@ void update() {
         ROS_INFO("(decision_node) /translation_done rot: %f trans: %f\n", translation_done.x, translation_done.y);
         cond_translation = false;
         new_translation_done = false;
-        
-        //change goal_to_reach coordinates to reflect rotations and translations done
-
-        // WARNING : Potentially wrong
-        goal_to_reach.x -= translation_done.x;
-        goal_to_reach.y -= translation_done.y;
-        new_goal_to_reach = true;
         
     }
     ROS_INFO("\n");
