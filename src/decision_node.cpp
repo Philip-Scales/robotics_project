@@ -15,6 +15,7 @@
 #include "std_msgs/ColorRGBA.h"
 #include "std_msgs/Float32.h"
 #include "std_msgs/Int32.h"
+#include "std_msgs/Bool.h"
 #include <cmath>
 #include "nav_msgs/Odometry.h"
 #include <tf/transform_datatypes.h>
@@ -25,13 +26,17 @@
 #include "tf/transform_broadcaster.h"
 #include "message_filters/subscriber.h"
 #include "tf/message_filter.h"
+#include "globals.h"
+
+
+
 
 //#define BASE5
 float robair_size = 0.2;//0.2 for small robair
 #define security_distance 0.5
 #define avoidance_distance 1.5
 #define AV_DIST 0.7
-#define AV_CHECK 0.5
+#define AV_CHECK 0.6
 
 
 class decision {
@@ -60,20 +65,21 @@ class decision {
 
         // communication with translation_action
         ros::Publisher pub_translation_to_do;
-        ros::Subscriber sub_translation_done;
+        ros::Subscriber sub_movement_done;
+        ros::Subscriber sub_arrived;
 
         bool cond_translation;//boolean to check if there is a /translation_to_do
         bool obstacle_detected;
-        bool ignore_goal;
         
         float avoidance_angle;       
         float rotation_to_do;
         float translation_to_do;
-        geometry_msgs::Point translation_done;
+        geometry_msgs::Point movement_done;
 
         bool new_goal_to_reach;//to check if a new /goal_to_reach is available or not
-        bool new_translation_done;//to check if a new /translation_done is available or not
-        bool avoidance_active; //true if goal has been changed by avoidance code
+        bool new_movement_done;//to check if a new /movement_done is available or not
+        bool avoidance_active; //true if robot is performing avoidance
+        bool arrived;
 
         geometry_msgs::Point goal_to_reach;
         float goal_angle; // angle to goal in robair's frame
@@ -104,13 +110,20 @@ class decision {
 
         // communication with translation_action
         pub_translation_to_do = n.advertise<geometry_msgs::Point>("translation_to_do", 0);
-        sub_translation_done = n.subscribe("translation_done", 1, &decision::translation_doneCallback, this);
+        sub_movement_done = n.subscribe("movement_done", 1, &decision::movement_doneCallback, this);
+        sub_arrived = n.subscribe("arrived", 1, &decision::arrivedCallback, this);
+
         cond_translation = false;
 
         new_goal_to_reach = false;
         avoidance_active = false;
-        new_translation_done = false;
-        avoidance_angle = 30.0*3.14/180.0;
+        new_movement_done = false;
+        arrived = false;
+        avoidance_angle = M_PI_4;
+        goal_to_reach.x = 0;
+        goal_to_reach.y = 0;
+        movement_done.x = 0;
+        movement_done.y = 0;
 
         //INFINTE LOOP TO COLLECT LASER DATA AND PROCESS THEM
         ros::Rate r(10);// this node will work at 10hz
@@ -133,12 +146,11 @@ geometry_msgs::Point checkCorridor(float angle, float length, float width) {
     float offset_closest_obstacle_x = range_max;
 
     //start with checking whole corridor to the new avoidance_goal. if dynamic obs steps in front, just panic for now.
-    beam_angle = angle_min;
-    for (int loop=0; loop < nb_beams; loop++, beam_angle += angle_inc ) {
-        float offset_scan_x = std::cos(angle) * current_scan[loop].x - std::sin(angle) * current_scan[loop].y;
-        float offset_scan_y = std::sin(angle) * current_scan[loop].x + std::cos(angle) * current_scan[loop].y;
+    for (int loop = 0; loop < nb_beams; ++loop) {
+        float offset_scan_x = std::cos(angle) * current_scan[loop].x + std::sin(angle) * current_scan[loop].y;
+        float offset_scan_y = -std::sin(angle) * current_scan[loop].x + std::cos(angle) * current_scan[loop].y;
         if ((fabs(offset_scan_y) < width) 
-            && (offset_scan_x > 0)) {
+            && (current_scan[loop].x > 0)) {
             //scan hit in corridor, scan is closer than closest,  and not behind us
             
             if (fabs(offset_scan_x) < fabs(offset_closest_obstacle_x)) {
@@ -157,223 +169,74 @@ geometry_msgs::Point checkCorridor(float angle, float length, float width) {
 //UPDATE: main processing
 /*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
-void update() {    
-    
-    //sleep(0.3);
-    
-    //check area immediately in front of robair, as in original
-    geometry_msgs::Point closest_obstacle = checkCorridor(0,range_max, robair_size);
-    if ((obstacle_detected)) {
-        nb_pts=0;
-        // closest obstacle is red
-        display[nb_pts].x = closest_obstacle.x;
-        display[nb_pts].y = closest_obstacle.y;
-        display[nb_pts].z = closest_obstacle.z;
+void update() {  
 
-        colors[nb_pts].r = 0;
-        colors[nb_pts].g = 0;
-        colors[nb_pts].b = 1;
-        colors[nb_pts].a = 1.0;
-        nb_pts++;
-        populateMarkerTopic();
-    }
-    else {
-        decltype(closest_obstacle) pt;
-        pt.x = 10000;
-        pt.y = 10000;
-        pt.z = 10000;
-        closest_obstacle.x = 10000;
-        
-        closest_obstacle.y = 10000;
-        
-        closest_obstacle.z = 10000;
-        
-        //pub_closest_obstacle.publish(pt);
-    }
-    if ( distancePoints(closest_obstacle, previous_closest_obstacle) > 0.05 ) {
-        ROS_INFO("              GEN closest obs: (%f; %f)", closest_obstacle.x, closest_obstacle.y);
-        previous_closest_obstacle.x = closest_obstacle.x;
-        previous_closest_obstacle.y = closest_obstacle.y;
-    }
-    
-    
-    // PANIC Obstacle detection
-    if (std::hypot(closest_obstacle.x, closest_obstacle.y) < security_distance) {
-        geometry_msgs::Point movement_to_do;
-        
-        movement_to_do.x = 0.0; //translation
-        movement_to_do.y = 0.0; //rotation
-        pub_translation_to_do.publish(movement_to_do);
-        ROS_WARN(" ---------------  DECISION PUBLISHED STOP (OBS) -------------------");
-        return;
-    }
-    
-    
-    //later:
-    // increment angle when neither corridor is free
-    //maybe don't need to make sure WHOLE corridor is free?  just enough to move in one step?
-    
-    //CAREFUL Collision avoidance
-    //  Now we know we are not in immediate danger of collision.
-    //  check if we can go towards our goal (determine if need obstacle AVOIDANCE)
-    
     //  calculate goal angle and distance
     goal_distance = sqrt( ( goal_to_reach.x * goal_to_reach.x ) + ( goal_to_reach.y * goal_to_reach.y ) );
     goal_angle = acos(goal_to_reach.x / goal_distance);
+    if (std::isnan(goal_angle)) {
+        goal_angle = 0;
+    }
     if ( goal_to_reach.y < 0 )
         goal_angle *=-1;
     ROS_INFO("'''',,,, goal polar coords: dist = %lf angle %lf\n ,,,,'''''\n", goal_distance, goal_angle);
     
-    //  check the corridor between robair and goal
-    //  CLOSEST OBSTACLE IS IN ROBAIR'S COORDINATE FRAME
-#if 0
+#if 1
     closest_obstacle = checkCorridor(goal_angle, goal_distance, robair_size);
-    
-    float distanceObsGoal = std::hypot(fabs(closest_obstacle.x - goal_to_reach.x), fabs(closest_obstacle.y - goal_to_reach.y));
+    float distanceToObs = std::hypot(closest_obstacle.x, closest_obstacle.y);
 
-    if (std::hypot(closest_obstacle.x, closest_obstacle.y) < avoidance_distance
-        && distanceObsGoal > security_distance+10) {   
-        //if (1) {     
-        // ## ROBAIR RED POINT IF DOING AVOIDANCE
-        display[nb_pts].x = -0.001;
-        display[nb_pts].y = 0;
-        display[nb_pts].z = 0;
+    if (distanceToObs < security_distance) {
+        goal_angle = 0.0;
+        goal_distance = 0.0;
+        new_goal_to_reach = true;
+    } else if (!avoidance_active) {
 
-        colors[nb_pts].r = 1;
-        colors[nb_pts].g = 0;
-        colors[nb_pts].b = 0;
-        colors[nb_pts].a = 1.0;
-        nb_pts++;
-        populateMarkerTopic();
-        
-        //if we have to avoid obstacle, change goal, then proceed as usual
-        geometry_msgs::Point movement_to_do;
-        //length up to which we check the corridor (hypothenuse of the triangle: robair - obstacle - avoidance goal
-        //float corridor_length = std::hypot(closest_obstacle.x, closest_obstacle.y) / std::cos(avoidance_angle);
-        //ROS_WARN("corridor_length = %lf avoidance_angle = %lf\n", corridor_length, avoidance_angle);
 
-        //check corridor to right of goal corridor
-        closest_obstacle = checkCorridor(goal_angle + avoidance_angle, AV_CHECK, robair_size);
-        float tempA = goal_angle + avoidance_angle; //rotation
-        float goalx = AV_DIST * std::cos(tempA);
-        float goaly = AV_DIST * std::sin(tempA);
-        
-        display[nb_pts].x = goalx;
-        display[nb_pts].y = goaly;
-        display[nb_pts].z = 0;
+        float distanceObsGoal = std::hypot(fabs(closest_obstacle.x - goal_to_reach.x), fabs(closest_obstacle.y - goal_to_reach.y));
 
-        colors[nb_pts].r = 0;
-        colors[nb_pts].g = 1;
-        colors[nb_pts].b = 1;
-        colors[nb_pts].a = 1.0;
-        nb_pts++;
-        populateMarkerTopic();
-        
-        if (std::hypot(closest_obstacle.x, closest_obstacle.y) > AV_CHECK) {
-            //corridor is free, use it
-            ROS_WARN("  - - -  USING RIGHT CORRIDOR - - -\n ");
-            goal_distance = AV_DIST; //translation
-            goal_angle = tempA; //rotation
-            avoidance_active = true;
-        }
-        else {
-            //check corridor to right of goal corridor
-            checkCorridor(goal_angle - avoidance_angle, AV_CHECK, robair_size);
-            tempA = goal_angle - avoidance_angle; //rotation
-            goalx = AV_DIST * std::cos(tempA);
-            goaly = AV_DIST * std::sin(tempA);
-            
-            display[nb_pts].x = goalx;
-            display[nb_pts].y = goaly;
-            display[nb_pts].z = 0;
+        if (distanceObsGoal < 0.35) {
 
-            colors[nb_pts].r = 1;
-            colors[nb_pts].g = 1;
-            colors[nb_pts].b = 0;
-            colors[nb_pts].a = 1.0;
-            nb_pts++;
-            populateMarkerTopic();
-            if (std::hypot(closest_obstacle.x, closest_obstacle.y) > AV_CHECK) {
-                //corridor if free, use it
-                ROS_WARN("  - - - USING LEFT CORRIDOR - - -\n ");
-                goal_distance = AV_DIST; 
-                goal_angle = tempA; //rotation
+        } else if (distanceToObs < avoidance_distance) { /* avoid */
+            auto target_dist = distanceToObs * 1.5;
+            auto left_obs = checkCorridor(goal_angle + avoidance_angle, target_dist, robair_size);
+            auto right_obs = checkCorridor(goal_angle - avoidance_angle, target_dist, robair_size);
+
+            if ((std::hypot(left_obs.x, left_obs.y) > target_dist)) {
+                goal_angle = avoidance_angle;
+                goal_distance = target_dist+1.0;
                 avoidance_active = true;
+            } else if (std::hypot(right_obs.x, right_obs.y) > target_dist) {
+                goal_angle = -avoidance_angle;
+                goal_distance = target_dist+1.0;
+                avoidance_active = true;
+            } else {
+                goal_angle = 0;
+                goal_distance = 0;
+                /* STOP */
             }
-            else {
-                ROS_WARN("  - - - NO CORRIDORS ARE FREE - - -\n ");
-                goal_distance = 0.0; //translation
-                //keep rotation the same.
-                pub_translation_to_do.publish(movement_to_do);
-                ROS_WARN(" ---------------  DECISION PUBLISHED STOP  (NCF) -------------------");
-                return;
-                
-            }
+            new_goal_to_reach = true;
         }
     }
     
+   
 #endif
     // we receive a new /goal_to_reach and robair is not doing a translation or a rotation
-    if ( new_goal_to_reach) {
 
-        //ROS_INFO("(decision_node) /goal_to_reach received: (%f, %f)", goal_to_reach.x, goal_to_reach.y);
+    //ROS_INFO("(decision_node) /goal_to_reach received: (%f, %f)", goal_to_reach.x, goal_to_reach.y);
 
-        if ( goal_distance ) { //if we need to move more than 0 meters
-            cond_translation = true; 
-            geometry_msgs::Point movement_to_do;
+    if ( new_goal_to_reach ) {
+        new_goal_to_reach = false;
+        geometry_msgs::Point movement_to_do;
 
-            ROS_INFO("(decision_node) /rotation_to_do: %f  ", goal_angle*180/M_PI);
-            ROS_INFO("(decision_node) /translation_to_do: %f", goal_distance);
-            
-            movement_to_do.x = goal_angle;
-            movement_to_do.y = goal_distance;
-            pub_translation_to_do.publish(movement_to_do);
-            ROS_WARN(" ---------------  DECISION PUBLISHED MOVEMENT_TO_DO -------------------");
-            
-            //put magenta point at goal
-            float goalx = goal_distance * std::cos(goal_angle);
-            float goaly = goal_distance * std::sin(goal_angle);
-            display[nb_pts].x = goalx+0.1;
-            display[nb_pts].y = goaly+0.1;
-            display[nb_pts].z = 0;
-
-            colors[nb_pts].r = 1;
-            colors[nb_pts].g = 0;
-            colors[nb_pts].b = 1;
-            colors[nb_pts].a = 1.0;
-            nb_pts++;
-            populateMarkerTopic();
-            
-            display[nb_pts].x = goal_to_reach.x-0.1;
-            display[nb_pts].y = goal_to_reach.y-0.1;
-            display[nb_pts].z = 0;
-
-            colors[nb_pts].r = 1;
-            colors[nb_pts].g = 0.5;
-            colors[nb_pts].b = 0.5;
-            colors[nb_pts].a = 1.0;
-            nb_pts++;
-            populateMarkerTopic();
-        }
-
-    }
-    new_goal_to_reach = false;
-    avoidance_active = false;
-    goal_distance = 0.0;
-    goal_angle = 0.0;
-
-    
+        ROS_INFO("(decision_node) /rotation_to_do: %f  ", goal_angle*180/M_PI);
+        ROS_INFO("(decision_node) /translation_to_do: %f", goal_distance);
+        
+        movement_to_do.x = goal_angle;
+        movement_to_do.y = goal_distance;
+        pub_translation_to_do.publish(movement_to_do);
         
 
-    //we receive an ack from translation_action_node. So, we send an ack to the moving_persons_detector_node
-    if ( new_translation_done ) {
-        ROS_INFO("(decision_node) /translation_done rot: %f trans: %f\n", translation_done.x, translation_done.y);
-        cond_translation = false;
-        new_translation_done = false;
-        
     }
-    ROS_INFO("\n");
-
 }// update
 
 //CALLBACKS
@@ -384,20 +247,26 @@ void goal_to_reachCallback(const geometry_msgs::Point::ConstPtr& g) {
 // process the goal received from moving_persons detector
 
     new_goal_to_reach = true;
+    avoidance_active = false;
     goal_to_reach.x = g->x;
     goal_to_reach.y = g->y;
 
 }
 
 
-void translation_doneCallback(const geometry_msgs::Point::ConstPtr& p) {
-// process the range received from the translation node
+void movement_doneCallback(const geometry_msgs::Point::ConstPtr& p) {
 
-    new_translation_done = true;
-    translation_done.x = p->x;
-    translation_done.y = p->y;
+    new_movement_done = true;
+    movement_done.x = p->x;
+    movement_done.y = p->y;
 
 }
+
+void arrivedCallback(const std_msgs::Bool::ConstPtr& a) {
+    arrived = a->data;
+}
+
+
 
 // - - - ------- obstacle callbacks
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan) {

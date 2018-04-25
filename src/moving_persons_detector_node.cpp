@@ -25,11 +25,11 @@
 #define LEG_SIZE_MAX 0.25
 
 // used for detection of chests
-#define CHEST_SIZE_MIN 0.20
+#define CHEST_SIZE_MIN 0.30
 #define CHEST_SIZE_MAX 0.60
 
 // the max offset between the point between the legs and the middle of the chest
-#define MAX_DISTANCE_BETWEEN_PERSON_AND_CHEST 0.15
+#define MAX_DISTANCE_BETWEEN_PERSON_AND_CHEST 0.12
 
 //used for detection of moving persons
 #define LEG_DISTANCE_MAX 0.7
@@ -555,8 +555,8 @@ void scanTopCallback(const sensor_msgs::LaserScan::ConstPtr& scan) {
 
         //transform the scan in cartesian framework
         // Apply correction to compensate for the top laser displacement
-        current_scan_top[loop].x = range_top[loop] * cos(beam_angle);
-        current_scan_top[loop].y = range_top[loop] * sin(beam_angle) - 0.25;
+        current_scan_top[loop].x = range_top[loop] * cos(beam_angle) - 0.10;
+        current_scan_top[loop].y = range_top[loop] * sin(beam_angle) - 0.15;
         current_scan_top[loop].z = 0.0;
     }
 }

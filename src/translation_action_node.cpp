@@ -14,6 +14,7 @@
 #include "nav_msgs/Odometry.h"
 #include "std_msgs/String.h"
 #include "std_msgs/Float32.h"
+#include "std_msgs/Bool.h"
 #include <cmath>
 #include <tf/transform_datatypes.h>
 #include "geometry_msgs/Point.h"
@@ -26,14 +27,14 @@ using namespace std;
 #define translation_error 0.1
 
 //rotation coefs
-#define rkp 0.75
+#define rkp 0.9
 #define rkd 0.00225
 #define rki -0.003 //029
 
 //translation coefs
 #define tkp 0.5
-#define tki 0//0.0012
-#define tkd 0.0//005
+#define tki 0.0012
+#define tkd 0.005
 
 
 
@@ -43,6 +44,7 @@ private:
     // communication with decision
     ros::Publisher pub_rotation_done;
     ros::Subscriber sub_rotation_to_do;
+    ros::Publisher pub_arrived;
 
     float rotation_to_do, rotation_done;
 
@@ -50,6 +52,7 @@ private:
     bool cond_rotation;
     float init_orientation;
     float current_orientation;
+    float previous_orientation;
 
     float r_error_integral;
     float r_error_previous;
@@ -62,7 +65,7 @@ private:
     ros::Subscriber sub_odometry;
 
     // communication with decision
-    ros::Publisher pub_translation_done;
+    ros::Publisher pub_movement_done;
     ros::Subscriber sub_translation_to_do;
 
     // communication with cmd_vel to send command to the mobile robot
@@ -74,11 +77,12 @@ private:
     bool new_translation_to_do;//to check if a new /translation_to_do is available or not
     bool new_odom;//to check if new data from odometry are available
     bool init_obstacle;//to check if the first "closest_obstacle" has been published or not
+    bool will_publish_arrive = true;
 
     geometry_msgs::Point start_position;
     geometry_msgs::Point current_position;
 
-    float translation_to_do;
+    float translation_to_do, translation_done;
 
 
     int cond_translation;
@@ -103,7 +107,8 @@ translation_action() {
     init_obstacle = false;
 
     // communication with decision
-    pub_translation_done = n.advertise<geometry_msgs::Point>("translation_done", 1);
+    pub_arrived = n.advertise<std_msgs::Bool>("arrived", 1);
+    pub_movement_done = n.advertise<geometry_msgs::Point>("movement_done", 1);
     sub_translation_to_do = n.subscribe("translation_to_do", 1, &translation_action::translation_to_doCallback, this);//this is the translation that has to be performed
 
 
@@ -130,6 +135,7 @@ void update() {
     
     // we receive a new "movement"  (translation) to do
     if ( new_translation_to_do && new_odom ) {
+        translation_done = distancePoints( start_position, current_position );
         //reset rotation related stuff
         r_error_integral = 0;
         r_error_previous = 0;
@@ -216,22 +222,10 @@ void update() {
     }
     
 
-    //we are performing a translation
-    init_obstacle = true;
-    closest_obstacle.x = 2* security_distance;
-    if (!init_obstacle)
-        ROS_WARN("waiting for callback from obstacle detection!\n");
-    if ( new_odom && cond_translation && init_obstacle ) {
-        float translation_done = distancePoints( start_position, current_position );
+    if ( new_odom && cond_translation) {
+        translation_done = distancePoints( start_position, current_position );
         float error = translation_to_do - translation_done;
-
-        // the error is the minimum between the difference between /translation_to_do and /translation_done and the distance with the closest obstacle
-        if ( error > closest_obstacle.x )
-            error = closest_obstacle.x;
-        bool obstacle_detected = ( fabs(closest_obstacle.x) < security_distance );
-        if ( obstacle_detected )
-            ROS_WARN("obstacle detected: (%f, %f)", closest_obstacle.x, closest_obstacle.y);
-        cond_translation = ( fabs(error) > translation_error ) && !obstacle_detected;
+        cond_translation = ( fabs(error) > translation_error );
         
         translation_speed = 0;
         if ( cond_translation ) {
@@ -246,30 +240,38 @@ void update() {
             ROS_INFO("(translation_action_node) translation_done: %f, translation_to_do: %f -> translation_speed: %f", translation_done, translation_to_do, translation_speed);
         }
         else { // this will rarely (if ever) run, since now we get new translation to do before finishing current one
-            ROS_INFO("(translation_action_node) translation_done: %f, translation_to_do: %f -> translation_speed: %f", translation_done, translation_to_do, translation_speed);
-            translation_done = distancePoints(start_position, current_position);
             ROS_INFO("(translation_action_node) final translation_done: %f", translation_done);
             ROS_INFO("(translation_action_node) waiting for a /translation_to_do");
             init_obstacle = false;
-
         }
         
-        //Publishing translation done
-        geometry_msgs::Point msg_translation_done;
-        msg_translation_done.x = rotation_done;
-        msg_translation_done.y = translation_done;
-        pub_translation_done.publish(msg_translation_done);
+        if (will_publish_arrive && !cond_translation && !cond_rotation) {
+            //publish i've arrived to decision node
+            ROS_WARN(":::::  ARRIVED  ::::\n");
+            std_msgs::Bool arrived;
+            arrived.data = true;
+            pub_arrived.publish(arrived);
+            will_publish_arrive = false;
+        } 
+        else {
         
-        //Publishing command to cmd_vel
-        geometry_msgs::Twist twist;
-        twist.linear.x = translation_speed;//we perform a translation on the x-axis
-        twist.linear.y = 0;
-        twist.linear.z = 0;
-        twist.angular.x = 0;
-        twist.angular.y = 0;
-        twist.angular.z = rotation_speed;
-        pub_cmd_vel.publish(twist);
-        ROS_WARN("X 6-----------------   PUBLISHED TWIST  ---------------6 X");
+            //Publishing translation done
+            geometry_msgs::Point msg_movement_done;
+            msg_movement_done.x = current_orientation - previous_orientation;
+            msg_movement_done.y = translation_done;
+            pub_movement_done.publish(msg_movement_done);
+            
+            //Publishing command to cmd_vel
+            geometry_msgs::Twist twist;
+            twist.linear.x = translation_speed;//we perform a translation on the x-axis
+            twist.linear.y = 0;
+            twist.linear.z = 0;
+            twist.angular.x = 0;
+            twist.angular.y = 0;
+            twist.angular.z = rotation_speed;
+            pub_cmd_vel.publish(twist);
+            ROS_WARN("X 6-----------------   PUBLISHED TWIST  ---------------6 X");
+        }
     }
     new_odom = false;
 
@@ -284,6 +286,7 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr& o) {
     current_position.x = o->pose.pose.position.x;
     current_position.y = o->pose.pose.position.y;
     current_position.z = o->pose.pose.position.z;
+    previous_orientation = current_orientation;
     current_orientation = tf::getYaw(o->pose.pose.orientation);
 
 
@@ -295,6 +298,10 @@ void translation_to_doCallback(const geometry_msgs::Point::ConstPtr & r) {
     new_translation_to_do = true;
     rotation_to_do = r->x;
     translation_to_do = r->y;
+
+    if (fabs(rotation_to_do) > 0.001 && fabs(translation_to_do > 0.001)) {
+        will_publish_arrive = true;
+    }
 
 }
 
