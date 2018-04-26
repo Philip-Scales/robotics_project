@@ -25,7 +25,7 @@
 #define LEG_SIZE_MAX 0.25
 
 // used for detection of chests
-#define CHEST_SIZE_MIN 0.30
+#define CHEST_SIZE_MIN 0.15
 #define CHEST_SIZE_MAX 0.60
 
 // the max offset between the point between the legs and the middle of the chest
