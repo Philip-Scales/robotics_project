@@ -9,14 +9,16 @@
 #include "std_msgs/ColorRGBA.h"
 #include <cmath>
 #include "std_msgs/Bool.h"
-
-#define FLOAT_COMP_EPS (0.001f)
+#include "nav_msgs/Odometry.h"
+#include <tf/transform_datatypes.h>
 
 //used for clustering
 #define CLUSTER_THRESHOLD_BOTTOM 0.2 //bottom laser threshold
 #define CLUSTER_THRESHOLD_TOP 0.3 //top laser threshold
 
 //used for detection of motion
+
+#define FLOAT_COMP_EPS (0.001f)
 #define DETECTION_THRESHOLD 0.2 //threshold for motion detection
 #define DYNAMIC_THRESHOLD 70 //to decide if a cluster is static or dynamic
 
@@ -45,6 +47,7 @@ private:
     // subscribers for top and bottom lasers
     ros::Subscriber sub_scan_bottom;
     ros::Subscriber sub_scan_top;
+    ros::Subscriber sub_movement_done;
 
     ros::Publisher pub_moving_persons_detector;
     ros::Publisher pub_moving_persons_detector_marker;
@@ -105,6 +108,20 @@ private:
     //! goal to reach to be able to compare them
     geometry_msgs::Point goal_to_reach;
     geometry_msgs::Point old_goal_to_reach;
+    geometry_msgs::Point initial_goal_to_reach;
+
+    typedef struct PositionWithOrientation {
+        geometry_msgs::Point position;
+        float orientation;
+    } PositionWithOrientation;
+
+    //! the last movement done by the robair: x coordinate holds the rotation; y coordinate - translation
+    PositionWithOrientation current_pos;
+    PositionWithOrientation prev_pos;
+    bool pos_initialized = false;
+    bool new_odom = false;
+
+
 
 
     // GRAPHICAL DISPLAY
@@ -160,11 +177,43 @@ private:
     float radiusRange = DEFAULT_RADIUS;
 
     //! value by which the radius can change per cycle
-    static const constexpr float RADIUS_DELTA = 0.15f;
+    static const constexpr float RADIUS_DELTA = 0.10;
 
     //! the minimum radius of the circle around the person
     static const constexpr float MIN_RADIUS_RANGE = 0.50f;
 
+private:
+    geometry_msgs::Point fromFrameToOrigin(const PositionWithOrientation &pos_or, const geometry_msgs::Point goalPointInRobair) {
+        float cs = std::cos(-pos_or.orientation);
+        float sn = std::sin(-pos_or.orientation);
+
+        float x0 = pos_or.position.x;
+        float y0 = pos_or.position.y;
+
+        float xg = goalPointInRobair.x;
+        float yg = goalPointInRobair.y;
+
+        geometry_msgs::Point retVal;
+        retVal.x = cs * xg + sn * yg + x0;
+        retVal.y = -sn * xg + cs * yg + y0;
+        return retVal;
+    }
+
+    geometry_msgs::Point fromOriginToFrame(const PositionWithOrientation &pos_or, const geometry_msgs::Point goalPointInWorld) {
+        float cs = std::cos(-pos_or.orientation);
+        float sn = std::sin(-pos_or.orientation);
+
+        float x0 = pos_or.position.x;
+        float y0 = pos_or.position.y;
+
+        float xg = goalPointInWorld.x;
+        float yg = goalPointInWorld.y;
+
+        geometry_msgs::Point retVal;
+        retVal.x = cs * (xg - x0) - sn * (yg - y0);
+        retVal.y = sn * (xg - x0) + cs * (yg - y0);
+        return retVal;
+    }
 
 public:
 
@@ -176,6 +225,9 @@ moving_persons_detector() {
     //! Subscription for the callback of the top laser scanner
     sub_scan_top = n.subscribe("scan1", 1, &moving_persons_detector::scanTopCallback, this);
 
+    //! Subscription for the movement done callback to adjust the circle while moving
+    sub_movement_done = n.subscribe("odom", 1, &moving_persons_detector::newOdomCallback, this);
+
     pub_moving_persons_detector_marker = n.advertise<visualization_msgs::Marker>("moving_persons_detector", 1); // Preparing a topic to publish our results. This will be used by the visualization tool rviz
     pub_moving_persons_detector = n.advertise<geometry_msgs::Point>("goal_to_reach", 1);     // Preparing a topic to publish the goal to reach.
 
@@ -184,6 +236,13 @@ moving_persons_detector() {
     old_goal_to_reach.x = 1000;
     old_goal_to_reach.y = 1000;
 
+    current_pos.orientation = 0.0;
+    current_pos.position.x = 0.0;
+    current_pos.position.y = 0.0;
+
+    prev_pos.orientation = 0.0;
+    prev_pos.position.x = 0.0;
+    prev_pos.position.y = 0.0;
 
     lostTimeoutCycles = UPDATE_FREQ_HZ * LOST_TIMEOUT_SEC;
     //INFINTE LOOP TO COLLECT LASER DATA AND PROCESS THEM
@@ -202,6 +261,7 @@ moving_persons_detector() {
 void update() {
 
     // we wait for new data of the laser to perform laser processing
+
     if ( new_laser ) {
         new_laser = false;
         nb_pts = 0;
@@ -446,6 +506,7 @@ void select_goal_to_reach() {
                 goal_to_reach = curPerson;
                 radiusRange = DEFAULT_RADIUS;
                 currentFrequency = DEFAULT_FREQUENCY;
+                initial_goal_to_reach = goal_to_reach;
             }
         }
         //! choosing a person closest to last detection
@@ -476,15 +537,42 @@ void select_goal_to_reach() {
     }
 
     firstTimePersonDetected = false;
+
     //! if no person detected within the circle: increase radius, decrease frequency
     if (!detected) {
+
+        if (pos_initialized) {
+            std::cout << "GOAL TO REACH BEFORE " << goal_to_reach.x << " " << goal_to_reach.y << std::endl;
+            // geometry_msgs::Point originPoint = fromFrameToOrigin(current_pos, goal_to_reach);
+            // goal_to_reach = fromOriginToFrame(prev_pos, originPoint);
+            geometry_msgs::Point goal_in_world = fromFrameToOrigin(prev_pos, goal_to_reach);
+            goal_to_reach = fromOriginToFrame(current_pos, goal_in_world);
+            prev_pos = current_pos;
+            old_goal_to_reach = goal_to_reach;
+            // std::cout << "ORIGIN POINT " << originPoint.x << " " << originPoint.y << std::endl;
+            std::cout << "GOAL TO REACH " << goal_to_reach.x << " " << goal_to_reach.y << std::endl;
+//            sleep(10);
+        }
+
+
         ++cyclesSinceLastDetection;
         if (currentFrequency > 0) {
             --currentFrequency;
             radiusRange += RADIUS_DELTA;
         }
+
+
+
     //! if person found in circle: increase frequency, decrease radius
     } else {
+        initial_goal_to_reach = goal_to_reach;
+
+        if (new_odom) {
+            prev_pos = current_pos;
+            new_odom = false;
+            pos_initialized = true;
+        }
+
         cyclesSinceLastDetection = 0;
 
         if (currentFrequency < MAX_FREQUENCY) {
@@ -561,6 +649,21 @@ void scanTopCallback(const sensor_msgs::LaserScan::ConstPtr& scan) {
     }
 }
 
+void newOdomCallback(const nav_msgs::Odometry::ConstPtr& o) {
+    static bool firstTime = true;
+    new_odom = true;
+    if (firstTime) {
+        firstTime = false;
+    } else {
+//        pos_initialized = true;
+    }
+//    prev_pos = current_pos;
+    current_pos.position = o->pose.pose.position;
+    current_pos.orientation = tf::getYaw(o->pose.pose.orientation);
+
+    std::cout << "RCPT POS " << current_pos.position.x << " " << current_pos.position.y << " " << current_pos.orientation << std::endl;
+}
+
 
 //! Utilities
 /*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -626,6 +729,34 @@ void populateMarkerReference() {
 
 }
 
+void populatePersonCircle() {
+#if 1
+    visualization_msgs::Marker marker;
+    marker.header.frame_id = "laser";
+    marker.header.stamp = ros::Time::now();
+    marker.ns = "example";
+    marker.id = 2;
+    marker.type = visualization_msgs::Marker::CYLINDER;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.pose.position = goal_to_reach;
+
+    marker.pose.orientation.w = 1;
+
+    marker.points.push_back(goal_to_reach);
+
+    marker.scale.x = radiusRange;
+    marker.scale.y = radiusRange;
+    marker.scale.z = 0.1;
+
+    marker.color.r = 1;
+    marker.color.g = 0;
+    marker.color.b = 0;
+    marker.color.a = 1.0;
+
+    pub_moving_persons_detector_marker.publish(marker);
+#endif
+}
+
 void populateMarkerTopic(){
 
     visualization_msgs::Marker marker;
@@ -663,7 +794,7 @@ void populateMarkerTopic(){
 
     pub_moving_persons_detector_marker.publish(marker);
     populateMarkerReference();
-
+    populatePersonCircle();
 }
 
 
